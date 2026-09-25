@@ -22,6 +22,9 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          ref: master
+          fetch-depth: 0
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -47,25 +50,33 @@ jobs:
       - name: Build static site
         run: npm run build
 
-      - name: Check for dataset changes
-        id: git_diff
-        run: |
-          if git diff --exit-code data/repos.json > /dev/null; then
-            echo "changed=false" >> $GITHUB_OUTPUT
-            echo "No changes detected in data/repos.json."
-          else
-            echo "changed=true" >> $GITHUB_OUTPUT
-            echo "Changes detected in data/repos.json."
-          fi
-
       - name: Commit and push changes if updated
-        if: steps.git_diff.outputs.changed == 'true'
         run: |
-          git config --local user.email "github-actions[bot]@users.noreply.github.com"
-          git config --local user.name "github-actions[bot]"
-          git add data/repos.json
-          git commit -m "chore(data): refresh starred repositories dataset [skip ci]"
-          git push
+          # Ensure git has the latest remote state
+          git fetch origin master
+
+          # Stash newly generated repos.json in a temporary location outside git
+          TEMP_REPOS="$(mktemp)"
+          cp data/repos.json "$TEMP_REPOS"
+
+          # Synchronize local branch to latest origin/master
+          git checkout -B master origin/master
+
+          # Restore newly generated repos.json
+          cp "$TEMP_REPOS" data/repos.json
+          rm -f "$TEMP_REPOS"
+
+          # Check if data/repos.json has changes against latest origin/master
+          if git diff --exit-code data/repos.json > /dev/null; then
+            echo "No changes detected in data/repos.json against origin/master."
+          else
+            echo "Changes detected in data/repos.json. Committing and pushing..."
+            git config --local user.email "github-actions[bot]@users.noreply.github.com"
+            git config --local user.name "github-actions[bot]"
+            git add data/repos.json
+            git commit -m "chore(data): refresh starred repositories dataset [skip ci]"
+            git push origin master
+          fi
 
       - name: Upload GitHub Pages artifact
         uses: actions/upload-pages-artifact@v3
