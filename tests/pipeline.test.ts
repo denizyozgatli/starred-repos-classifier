@@ -1,9 +1,10 @@
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import { existsSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { normalizeRepo, type RawGitHubRepo } from '../scripts/lib/normalize.ts';
 import { classifyWithRules, tokenizeRepoName, normalizeTopic, scoreDomainsWithSaturation, classifyRepo, classifyWithLLM, GEMINI_MODEL } from '../scripts/lib/classifier.ts';
 import { computeInputHash, loadCache, saveCache } from '../scripts/lib/cache.ts';
+import { RateLimiter, executeWithRetry, extractRetryDelayMs, isRateLimitError, isUnavailableError } from '../scripts/lib/rate-limiter.ts';
 import { applyOverrides } from '../scripts/lib/overrides.ts';
 import { validateRepos } from '../scripts/lib/validator.ts';
 import { fetchAllStarredRepos, GitHubApiError } from '../scripts/lib/github.ts';
@@ -906,6 +907,290 @@ describe('Data Pipeline', () => {
       const hash2 = res2[0].classification.inputHash;
 
       expect(hash1).not.toBe(hash2);
+    });
+  });
+
+  describe('Rate Limiting, Retries & Safe Fallback Cache', () => {
+    const testCachePath = resolve(process.cwd(), 'data', 'test-cache.tmp.json');
+    const testReposPath = resolve(process.cwd(), 'data', 'test-repos-seed.tmp.json');
+
+    afterEach(() => {
+      if (existsSync(testCachePath)) unlinkSync(testCachePath);
+      if (existsSync(testReposPath)) unlinkSync(testReposPath);
+      vi.restoreAllMocks();
+    });
+
+    it('rate limiter enforces target spacing ensuring <= 5 requests/minute', async () => {
+      const limiter = new RateLimiter({ minIntervalMs: 12500 });
+      expect(limiter.getMinIntervalMs()).toBe(12500);
+
+      // Verify pacing with a mock sleepFn
+      const sleepCalls: number[] = [];
+      const mockSleep = async (ms: number) => {
+        sleepCalls.push(ms);
+      };
+
+      await limiter.acquire(mockSleep);
+      expect(sleepCalls.length).toBe(0); // first call dispatches immediately
+
+      // Immediately acquiring second request should wait for remaining interval
+      await limiter.acquire(mockSleep);
+      expect(sleepCalls.length).toBe(1);
+      expect(sleepCalls[0]).toBeGreaterThanOrEqual(12400);
+      expect(sleepCalls[0]).toBeLessThanOrEqual(12500);
+    });
+
+    it('retries on HTTP 429 respecting server retryDelay', async () => {
+      let attempts = 0;
+      const sleepDelays: number[] = [];
+      const mockSleep = async (ms: number) => {
+        sleepDelays.push(ms);
+      };
+
+      const result = await executeWithRetry(
+        async () => {
+          attempts++;
+          if (attempts === 1) {
+            throw new Error('ClientError: got status: 429 Too Many Requests. {"details":[{"retryDelay":"15s"}]}');
+          }
+          return { success: true };
+        },
+        {
+          maxRetries: 2,
+          sleepFn: mockSleep,
+        }
+      );
+
+      expect(attempts).toBe(2);
+      expect(result.success).toBe(true);
+      expect(sleepDelays.length).toBe(1);
+      expect(sleepDelays[0]).toBe(16000); // 15s + 1000ms buffer
+    });
+
+    it('retries on HTTP 503 using exponential backoff', async () => {
+      let attempts = 0;
+      const sleepDelays: number[] = [];
+      const mockSleep = async (ms: number) => {
+        sleepDelays.push(ms);
+      };
+
+      const result = await executeWithRetry(
+        async () => {
+          attempts++;
+          if (attempts <= 2) {
+            throw new Error('ServerError: got status: 503 Service Unavailable. Spikes in demand');
+          }
+          return { category: 'ML / AI', confidence: 0.9 };
+        },
+        {
+          maxRetries: 3,
+          baseDelayMs: 100,
+          sleepFn: mockSleep,
+        }
+      );
+
+      expect(attempts).toBe(3);
+      expect(result.category).toBe('ML / AI');
+      expect(sleepDelays.length).toBe(2);
+      expect(sleepDelays[0]).toBe(200); // baseDelay * 2^1
+      expect(sleepDelays[1]).toBe(400); // baseDelay * 2^2
+    });
+
+    it('eventually falls back safely when retry limit is exhausted', async () => {
+      const sparseRepo = normalizeRepo({
+        id: 999,
+        name: 'unstable-api-repo',
+        full_name: 'test/unstable-api-repo',
+        description: 'Random obscure project',
+        topics: [],
+        language: 'C++',
+        stargazers_count: 5,
+        html_url: 'https://github.com/test/unstable-api-repo',
+        updated_at: '2026-01-01T00:00:00Z',
+      });
+
+      // classifyWithLLM with maxRetries = 1 and dummy sleepFn
+      const res = await classifyWithLLM(sparseRepo, {
+        apiKey: 'test-failing-key',
+        maxRetries: 1,
+        sleepFn: async () => {},
+        rateLimiter: new RateLimiter({ minIntervalMs: 0 }),
+      });
+
+      expect(res.category).toBe('Other');
+      expect(res.method).toBe('fallback');
+      expect(res.confidence).toBe(0.5);
+    });
+
+    it('never persists fallback classifications in cache', () => {
+      const initialCache = {
+        'test/successful-llm': {
+          category: 'ML / AI' as const,
+          classification: {
+            method: 'llm' as const,
+            confidence: 0.88,
+            classifiedAt: '2026-01-01T00:00:00Z',
+            inputHash: 'hash1',
+          },
+        },
+        'test/failed-fallback': {
+          category: 'Other' as const,
+          classification: {
+            method: 'fallback' as const,
+            confidence: 0.5,
+            classifiedAt: '2026-01-01T00:00:00Z',
+            inputHash: 'hash2',
+          },
+        },
+      };
+
+      saveCache(initialCache, testCachePath);
+
+      // Load cache without seeding
+      const loaded = loadCache(testCachePath, null);
+      expect(loaded['test/successful-llm']).toBeDefined();
+      expect(loaded['test/successful-llm'].category).toBe('ML / AI');
+      expect(loaded['test/successful-llm'].classification.method).toBe('llm');
+
+      // The fallback entry must NOT be present
+      expect(loaded['test/failed-fallback']).toBeUndefined();
+    });
+
+    it('seeds and reuses persisted rule and LLM classifications from data/repos.json with matching inputHash', () => {
+      const mockRepos: Repository[] = [
+        {
+          id: 101,
+          name: 'persisted-rule-repo',
+          fullName: 'org/persisted-rule-repo',
+          owner: 'org',
+          description: 'A React component library',
+          topics: ['react', 'ui'],
+          language: 'TypeScript',
+          stars: 100,
+          url: 'https://github.com/org/persisted-rule-repo',
+          updatedAt: '2026-01-01T00:00:00Z',
+          archived: false,
+          fork: false,
+          category: 'Web Frontend',
+          classification: {
+            method: 'rule',
+            confidence: 0.95,
+            classifiedAt: '2026-01-01T00:00:00Z',
+            inputHash: computeInputHash({
+              fullName: 'org/persisted-rule-repo',
+              description: 'A React component library',
+              topics: ['react', 'ui'],
+              language: 'TypeScript',
+            }),
+          },
+        },
+        {
+          id: 102,
+          name: 'persisted-llm-repo',
+          fullName: 'org/persisted-llm-repo',
+          owner: 'org',
+          description: 'Curated list of materials',
+          topics: [],
+          language: null,
+          stars: 50,
+          url: 'https://github.com/org/persisted-llm-repo',
+          updatedAt: '2026-01-01T00:00:00Z',
+          archived: false,
+          fork: false,
+          category: 'Learning / Docs',
+          classification: {
+            method: 'llm',
+            confidence: 0.85,
+            classifiedAt: '2026-01-01T00:00:00Z',
+            inputHash: computeInputHash({
+              fullName: 'org/persisted-llm-repo',
+              description: 'Curated list of materials',
+              topics: [],
+              language: null,
+            }),
+          },
+        },
+        {
+          id: 103,
+          name: 'persisted-fallback-repo',
+          fullName: 'org/persisted-fallback-repo',
+          owner: 'org',
+          description: 'An ambiguous project that previously failed',
+          topics: [],
+          language: null,
+          stars: 10,
+          url: 'https://github.com/org/persisted-fallback-repo',
+          updatedAt: '2026-01-01T00:00:00Z',
+          archived: false,
+          fork: false,
+          category: 'Other',
+          classification: {
+            method: 'fallback',
+            confidence: 0.5,
+            classifiedAt: '2026-01-01T00:00:00Z',
+            inputHash: computeInputHash({
+              fullName: 'org/persisted-fallback-repo',
+              description: 'An ambiguous project that previously failed',
+              topics: [],
+              language: null,
+            }),
+          },
+        },
+      ];
+
+      writeFileSync(testReposPath, JSON.stringify(mockRepos, null, 2), 'utf-8');
+
+      // Load cache specifying the mock repos.json as seed
+      const cache = loadCache(testCachePath, testReposPath);
+
+      // Rule and LLM entries must be present
+      expect(cache['org/persisted-rule-repo']).toBeDefined();
+      expect(cache['org/persisted-rule-repo'].category).toBe('Web Frontend');
+      expect(cache['org/persisted-rule-repo'].classification.method).toBe('rule');
+
+      expect(cache['org/persisted-llm-repo']).toBeDefined();
+      expect(cache['org/persisted-llm-repo'].category).toBe('Learning / Docs');
+      expect(cache['org/persisted-llm-repo'].classification.method).toBe('llm');
+
+      // The fallback entry must NOT be seeded into cache
+      expect(cache['org/persisted-fallback-repo']).toBeUndefined();
+    });
+
+    it('fallback is eligible for future retry because it is not cached', () => {
+      // Repos with method fallback are not cached
+      const cache = loadCache(testCachePath, null);
+      expect(cache['org/unclassified-repo']).toBeUndefined();
+
+      // On next run, without a cache hit, classifyRepo is called
+      const repo = normalizeRepo({
+        id: 888,
+        name: 'retry-candidate',
+        full_name: 'test/retry-candidate',
+        description: 'Eligible for retry',
+        topics: [],
+        language: 'Python',
+        stargazers_count: 5,
+        html_url: 'https://github.com/test/retry-candidate',
+        updated_at: '2026-01-01T00:00:00Z',
+      });
+
+      const inputHash = computeInputHash(repo);
+      const isCacheHit = Boolean(cache[repo.fullName] && cache[repo.fullName].classification.inputHash === inputHash);
+      expect(isCacheHit).toBe(false);
+    });
+
+    it('accurately parses rate limit and unavailable error types and delays', () => {
+      expect(isRateLimitError(new Error('429 Too Many Requests'))).toBe(true);
+      expect(isRateLimitError(new Error('RESOURCE_EXHAUSTED'))).toBe(true);
+      expect(isRateLimitError(new Error('500 Internal Server Error'))).toBe(false);
+
+      expect(isUnavailableError(new Error('503 Service Unavailable'))).toBe(true);
+      expect(isUnavailableError(new Error('UNAVAILABLE'))).toBe(true);
+      expect(isUnavailableError(new Error('404 Not Found'))).toBe(false);
+
+      expect(extractRetryDelayMs(new Error('{"retryDelay":"12s"}'))).toBe(13000);
+      expect(extractRetryDelayMs(new Error('Please retry in 5.5s.'))).toBe(6500);
+      expect(extractRetryDelayMs(new Error('Generic failure'))).toBeNull();
     });
   });
 });

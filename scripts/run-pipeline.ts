@@ -56,11 +56,13 @@ export async function executePipeline(): Promise<void> {
         inputHash,
       };
 
-      // Update cache
-      cache[repo.fullName] = {
-        category: result.category,
-        classification: classificationMeta,
-      };
+      // Update cache ONLY for successful (non-fallback) classifications
+      if (result.method !== 'fallback') {
+        cache[repo.fullName] = {
+          category: result.category,
+          classification: classificationMeta,
+        };
+      }
 
       classifiedRepos.push({
         ...repo,

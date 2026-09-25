@@ -1,6 +1,7 @@
 import { GoogleGenAI } from '@google/genai';
 import { ALLOWED_CATEGORIES, type ClassificationMethod, type RepositoryCategory } from '../../src/types/repo.ts';
 import type { NormalizedRepo } from './normalize.ts';
+import { RateLimiter, defaultGeminiRateLimiter, executeWithRetry } from './rate-limiter.ts';
 
 export interface ClassificationResult {
   category: RepositoryCategory;
@@ -723,15 +724,26 @@ export function classifyWithRules(repo: NormalizedRepo): ClassificationResult | 
 
 export const GEMINI_MODEL = 'gemini-3.8-flash';
 
+export interface LLMClassificationOptions {
+  apiKey?: string;
+  rateLimiter?: RateLimiter;
+  maxRetries?: number;
+  sleepFn?: (ms: number) => Promise<void>;
+}
+
 /**
  * Classifies an ambiguous repository using the Gemini LLM.
  * Falls back to "Other" with method: 'fallback' if no API key is provided or if an error occurs.
  */
 export async function classifyWithLLM(
   repo: NormalizedRepo,
-  apiKey?: string
+  optionsOrKey?: string | LLMClassificationOptions
 ): Promise<ClassificationResult> {
-  const key = apiKey || process.env.GEMINI_API_KEY;
+  const options: LLMClassificationOptions = typeof optionsOrKey === 'string'
+    ? { apiKey: optionsOrKey }
+    : optionsOrKey || {};
+
+  const key = options.apiKey || process.env.GEMINI_API_KEY;
   if (!key) {
     return {
       category: 'Other',
@@ -739,6 +751,10 @@ export async function classifyWithLLM(
       confidence: 0.5,
     };
   }
+
+  const rateLimiter = options.rateLimiter !== undefined ? options.rateLimiter : defaultGeminiRateLimiter;
+  const maxRetries = options.maxRetries ?? 2;
+  const sleepFn = options.sleepFn;
 
   try {
     const ai = new GoogleGenAI({ apiKey: key });
@@ -763,18 +779,27 @@ Classification Rules:
 3. Respond with a valid JSON object containing "category" and "confidence" (number between 0.50 and 0.99).
 4. Example JSON response: {"category": "Learning / Docs", "confidence": 0.88}`;
 
-    const response = await ai.models.generateContent({
-      model: GEMINI_MODEL,
-      contents: prompt,
-      config: {
-        responseMimeType: 'application/json',
+    const parsed = await executeWithRetry(
+      async () => {
+        const response = await ai.models.generateContent({
+          model: GEMINI_MODEL,
+          contents: prompt,
+          config: {
+            responseMimeType: 'application/json',
+          },
+        });
+
+        const text = response.text || '';
+        return JSON.parse(text);
       },
-    });
+      {
+        rateLimiter,
+        maxRetries,
+        sleepFn,
+      }
+    );
 
-    const text = response.text || '';
-    const parsed = JSON.parse(text);
-
-    if (parsed.category && ALLOWED_CATEGORIES.includes(parsed.category as RepositoryCategory)) {
+    if (parsed && parsed.category && ALLOWED_CATEGORIES.includes(parsed.category as RepositoryCategory)) {
       return {
         category: parsed.category as RepositoryCategory,
         method: 'llm',
@@ -799,11 +824,11 @@ Classification Rules:
  */
 export async function classifyRepo(
   repo: NormalizedRepo,
-  geminiApiKey?: string
+  geminiApiKeyOrOptions?: string | LLMClassificationOptions
 ): Promise<ClassificationResult> {
   const ruleResult = classifyWithRules(repo);
   if (ruleResult) {
     return ruleResult;
   }
-  return classifyWithLLM(repo, geminiApiKey);
+  return classifyWithLLM(repo, geminiApiKeyOrOptions);
 }

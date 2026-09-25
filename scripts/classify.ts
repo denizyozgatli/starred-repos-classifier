@@ -48,10 +48,12 @@ export async function runClassification(
         inputHash,
       };
 
-      cache[repo.fullName] = {
-        category: res.category,
-        classification,
-      };
+      if (res.method !== 'fallback') {
+        cache[repo.fullName] = {
+          category: res.category,
+          classification,
+        };
+      }
 
       classifiedRepos.push({
         ...repo,
