@@ -1,10 +1,14 @@
 import { describe, it, expect, afterEach } from 'vitest';
+import { existsSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { normalizeRepo, type RawGitHubRepo } from '../scripts/lib/normalize.ts';
 import { classifyWithRules } from '../scripts/lib/classifier.ts';
 import { computeInputHash } from '../scripts/lib/cache.ts';
 import { applyOverrides } from '../scripts/lib/overrides.ts';
 import { validateRepos } from '../scripts/lib/validator.ts';
 import { fetchAllStarredRepos, GitHubApiError } from '../scripts/lib/github.ts';
+import { atomicWriteJson, withDatasetSafety } from '../scripts/lib/storage.ts';
+import { runClassification } from '../scripts/classify.ts';
 import type { Repository } from '../src/types/repo.ts';
 
 describe('Data Pipeline', () => {
@@ -363,6 +367,106 @@ describe('Data Pipeline', () => {
       };
 
       await expect(fetchAllStarredRepos({ token: 'test-token' })).rejects.toThrow('rate limit exceeded');
+    });
+  });
+
+  describe('Atomic Dataset Safety & Crash Rollback', () => {
+    const testDataDir = resolve(process.cwd(), 'data');
+    const testTarget = resolve(testDataDir, 'test-repos.json');
+    const testBackup = resolve(testDataDir, 'test-repos.backup.json');
+    const testRaw = resolve(testDataDir, 'test-raw.json');
+
+    const validInitialData = [
+      {
+        id: 777,
+        name: 'vital-repo',
+        fullName: 'owner/vital-repo',
+        owner: 'owner',
+        description: 'Crucial repository data',
+        topics: ['important'],
+        language: 'TypeScript',
+        stars: 100,
+        url: 'https://github.com/owner/vital-repo',
+        updatedAt: '2026-01-01T00:00:00Z',
+        category: 'Web Frontend',
+        classification: {
+          method: 'rule',
+          confidence: 0.95,
+          classifiedAt: '2026-01-01T00:00:00Z',
+          inputHash: 'hash-vital',
+        },
+      },
+    ];
+
+    afterEach(() => {
+      [testTarget, testBackup, testRaw].forEach(p => {
+        if (existsSync(p)) {
+          try { unlinkSync(p); } catch { /* ignore */ }
+        }
+      });
+    });
+
+    it('performs atomic write replacing target file cleanly', () => {
+      atomicWriteJson(testTarget, validInitialData);
+      expect(existsSync(testTarget)).toBe(true);
+
+      const parsed = JSON.parse(readFileSync(testTarget, 'utf-8'));
+      expect(parsed).toEqual(validInitialData);
+    });
+
+    it('restores original valid dataset if an operation fails or crashes', async () => {
+      // 1. Establish existing valid dataset
+      atomicWriteJson(testTarget, validInitialData);
+
+      // 2. Trigger an operation that corrupts or throws an error
+      const failedOp = withDatasetSafety(testTarget, testBackup, async () => {
+        // Corrupt the target in memory/disk
+        writeFileSync(testTarget, 'corrupted content or empty array', 'utf-8');
+        throw new Error('Simulated crash during processing');
+      });
+
+      // 3. Verify operation threw error
+      await expect(failedOp).rejects.toThrow('Simulated crash during processing');
+
+      // 4. Verify existing dataset was automatically restored and remains 100% intact
+      expect(existsSync(testTarget)).toBe(true);
+      const restored = JSON.parse(readFileSync(testTarget, 'utf-8'));
+      expect(restored).toEqual(validInitialData);
+    });
+
+    it('protects existing dataset when classification validation fails', async () => {
+      // 1. Write valid existing repos.json
+      atomicWriteJson(testTarget, validInitialData);
+
+      // 2. Write invalid raw data with negative stars and bad URL to fail schema validation
+      const invalidRaw = [
+        {
+          id: 999,
+          name: 'broken-repo',
+          fullName: 'owner/broken-repo',
+          owner: 'owner',
+          description: 'broken',
+          topics: ['broken'],
+          language: 'Go',
+          stars: -10, // Invalid negative stars, triggers schema validation failure
+          url: 'not-a-valid-url',
+          updatedAt: 'not-a-date',
+          archived: false,
+          fork: false,
+        },
+      ];
+      writeFileSync(testRaw, JSON.stringify(invalidRaw), 'utf-8');
+
+      // 3. Attempt to run classification safely
+      const failingClassification = withDatasetSafety(testTarget, testBackup, () =>
+        runClassification(testRaw, testTarget)
+      );
+
+      await expect(failingClassification).rejects.toThrow('Validation failed');
+
+      // 4. Verify existing dataset is preserved and intact
+      const existing = JSON.parse(readFileSync(testTarget, 'utf-8'));
+      expect(existing).toEqual(validInitialData);
     });
   });
 });

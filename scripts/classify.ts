@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import 'dotenv/config';
 import { computeInputHash, loadCache, saveCache } from './lib/cache.ts';
@@ -6,16 +6,17 @@ import { classifyRepo } from './lib/classifier.ts';
 import type { NormalizedRepo } from './lib/normalize.ts';
 import { applyOverrides, loadOverrides } from './lib/overrides.ts';
 import { validateRepos } from './lib/validator.ts';
+import { atomicWriteJson, withDatasetSafety, REPOS_PATH, REPOS_BACKUP_PATH } from './lib/storage.ts';
 import type { Repository } from '../src/types/repo.ts';
 
-async function main() {
+export async function runClassification(
+  rawPath: string = resolve(process.cwd(), 'data', 'raw-repos.json'),
+  targetPath: string = REPOS_PATH
+): Promise<Repository[]> {
   console.log('[classify] Starting classification process...');
-  const rawPath = resolve(process.cwd(), 'data', 'raw-repos.json');
-  const targetPath = resolve(process.cwd(), 'data', 'repos.json');
 
   if (!existsSync(rawPath)) {
-    console.error(`[classify] Cannot find ${rawPath}. Run "npm run pipeline:fetch" first.`);
-    process.exit(1);
+    throw new Error(`Cannot find ${rawPath}. Run "npm run pipeline:fetch" first.`);
   }
 
   const rawRepos: NormalizedRepo[] = JSON.parse(readFileSync(rawPath, 'utf-8'));
@@ -66,14 +67,25 @@ async function main() {
   const validation = validateRepos(finalRepos);
 
   if (!validation.valid) {
-    console.error(`[classify] Validation failed with ${validation.errors.length} errors:`);
-    validation.errors.forEach(e => console.error(`  - ${e.message}`));
-    process.exit(1);
+    const errorDetails = validation.errors.map(e => `  - ${e.message}`).join('\n');
+    throw new Error(`Validation failed with ${validation.errors.length} errors:\n${errorDetails}`);
   }
 
-  writeFileSync(targetPath, JSON.stringify(finalRepos, null, 2), 'utf-8');
+  atomicWriteJson(targetPath, finalRepos);
   saveCache(cache);
   console.log(`[classify] Saved ${finalRepos.length} validated repositories to ${targetPath}`);
+  return finalRepos;
 }
 
-main();
+export async function main(): Promise<void> {
+  try {
+    await withDatasetSafety(REPOS_PATH, REPOS_BACKUP_PATH, () => runClassification());
+  } catch (err) {
+    console.error('[classify] Fatal error during classification:', err);
+    process.exit(1);
+  }
+}
+
+if (process.argv[1]?.endsWith('classify.ts') || process.argv[1]?.endsWith('classify.js')) {
+  main();
+}

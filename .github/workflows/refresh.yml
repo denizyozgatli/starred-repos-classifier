@@ -1,4 +1,4 @@
-name: Refresh Starred Repositories
+name: Refresh and Deploy Starred Repositories
 
 on:
   schedule:
@@ -12,11 +12,11 @@ permissions:
   id-token: write
 
 concurrency:
-  group: 'refresh-and-deploy'
+  group: 'pages-deploy'
   cancel-in-progress: false
 
 jobs:
-  refresh:
+  refresh-and-build:
     runs-on: ubuntu-latest
 
     steps:
@@ -50,7 +50,6 @@ jobs:
       - name: Check for dataset changes
         id: git_diff
         run: |
-          git status --porcelain
           if git diff --exit-code data/repos.json > /dev/null; then
             echo "changed=false" >> $GITHUB_OUTPUT
             echo "No changes detected in data/repos.json."
@@ -67,3 +66,19 @@ jobs:
           git add data/repos.json
           git commit -m "chore(data): refresh starred repositories dataset [skip ci]"
           git push
+
+      - name: Upload GitHub Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: './dist'
+
+  deploy:
+    needs: refresh-and-build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

@@ -30,6 +30,8 @@ dist-ssr
 # Local data cache and generated overrides (if temporary)
 # Note: data/repos.json and data/overrides.json are tracked or generated
 data/.cache.json
+data/repos.backup.json
+data/*.tmp.json
 
 # Local scripts
 powershell.bat

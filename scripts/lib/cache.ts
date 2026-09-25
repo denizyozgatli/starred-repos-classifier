@@ -21,7 +21,8 @@ export function computeInputHash(repo: {
   topics: string[];
   language: string | null;
 }): string {
-  const normalizedTopics = [...repo.topics].map(t => t.toLowerCase().trim()).sort().join(',');
+  const topicsArray = Array.isArray(repo.topics) ? repo.topics : [];
+  const normalizedTopics = [...topicsArray].map(t => String(t).toLowerCase().trim()).sort().join(',');
   const payload = [
     repo.fullName.toLowerCase().trim(),
     (repo.description || '').trim(),
