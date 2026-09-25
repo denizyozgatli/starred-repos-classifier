@@ -721,6 +721,8 @@ export function classifyWithRules(repo: NormalizedRepo): ClassificationResult | 
   return bestMatch;
 }
 
+export const GEMINI_MODEL = 'gemini-3.8-flash';
+
 /**
  * Classifies an ambiguous repository using the Gemini LLM.
  * Falls back to "Other" with method: 'fallback' if no API key is provided or if an error occurs.
@@ -762,7 +764,7 @@ Classification Rules:
 4. Example JSON response: {"category": "Learning / Docs", "confidence": 0.88}`;
 
     const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash',
+      model: GEMINI_MODEL,
       contents: prompt,
       config: {
         responseMimeType: 'application/json',

@@ -2,7 +2,7 @@ import { describe, it, expect, afterEach } from 'vitest';
 import { existsSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { normalizeRepo, type RawGitHubRepo } from '../scripts/lib/normalize.ts';
-import { classifyWithRules, tokenizeRepoName, normalizeTopic, scoreDomainsWithSaturation, classifyRepo, classifyWithLLM } from '../scripts/lib/classifier.ts';
+import { classifyWithRules, tokenizeRepoName, normalizeTopic, scoreDomainsWithSaturation, classifyRepo, classifyWithLLM, GEMINI_MODEL } from '../scripts/lib/classifier.ts';
 import { computeInputHash, loadCache, saveCache } from '../scripts/lib/cache.ts';
 import { applyOverrides } from '../scripts/lib/overrides.ts';
 import { validateRepos } from '../scripts/lib/validator.ts';
@@ -504,6 +504,10 @@ describe('Data Pipeline', () => {
       expect(res.category).toBe('Other');
       expect(res.method).toBe('fallback');
       expect(res.confidence).toBe(0.5);
+    });
+
+    it('configures the recommended gemini-3.8-flash model identifier', () => {
+      expect(GEMINI_MODEL).toBe('gemini-3.8-flash');
     });
   });
 
