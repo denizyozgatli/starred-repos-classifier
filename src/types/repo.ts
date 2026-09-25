@@ -23,8 +23,10 @@ export const ALLOWED_CATEGORIES: readonly RepositoryCategory[] = [
   "Other",
 ] as const;
 
+export type ClassificationMethod = "rule" | "llm" | "manual" | "fallback";
+
 export interface ClassificationMeta {
-  method: "rule" | "llm" | "manual";
+  method: ClassificationMethod;
   confidence: number | null;
   classifiedAt: string;
   inputHash: string;

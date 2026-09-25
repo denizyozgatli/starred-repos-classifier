@@ -112,7 +112,7 @@ export function validateRepos(data: unknown): ValidationResult {
       errors.push({ index, repoFullName: repoIdentifier, field: 'classification', message: 'Missing classification metadata.' });
     } else {
       const { method, inputHash, classifiedAt } = repo.classification;
-      if (!['rule', 'llm', 'manual'].includes(method)) {
+      if (!['rule', 'llm', 'manual', 'fallback'].includes(method)) {
         errors.push({ index, repoFullName: repoIdentifier, field: 'classification.method', message: `Invalid classification method: ${method}` });
       }
       if (typeof inputHash !== 'string' || !inputHash.trim()) {

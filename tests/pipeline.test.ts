@@ -2,8 +2,8 @@ import { describe, it, expect, afterEach } from 'vitest';
 import { existsSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { normalizeRepo, type RawGitHubRepo } from '../scripts/lib/normalize.ts';
-import { classifyWithRules } from '../scripts/lib/classifier.ts';
-import { computeInputHash } from '../scripts/lib/cache.ts';
+import { classifyWithRules, tokenizeRepoName, normalizeTopic, scoreDomainsWithSaturation, classifyRepo, classifyWithLLM } from '../scripts/lib/classifier.ts';
+import { computeInputHash, loadCache, saveCache } from '../scripts/lib/cache.ts';
 import { applyOverrides } from '../scripts/lib/overrides.ts';
 import { validateRepos } from '../scripts/lib/validator.ts';
 import { fetchAllStarredRepos, GitHubApiError } from '../scripts/lib/github.ts';
@@ -139,6 +139,236 @@ describe('Data Pipeline', () => {
       const res = classifyWithRules(repo);
       expect(res).toBeNull();
     });
+
+    it('extracts tokens from hyphenated, snake_case, and camelCase repository names', () => {
+      expect(tokenizeRepoName('awesome-machine-learning')).toEqual(['awesome', 'machine', 'learning']);
+      expect(tokenizeRepoName('PythonDataScienceHandbook')).toEqual(['python', 'data', 'science', 'handbook']);
+      expect(tokenizeRepoName('Python-100-Days')).toEqual(['python', '100', 'days']);
+      expect(tokenizeRepoName('PromptEngineeringCourse')).toEqual(['prompt', 'engineering', 'course']);
+      expect(tokenizeRepoName('time_series_predictor')).toEqual(['time', 'series', 'predictor']);
+      expect(tokenizeRepoName('data-engineer-handbook')).toEqual(['data', 'engineer', 'handbook']);
+    });
+
+    it('normalizes equivalent topic forms canonically', () => {
+      expect(normalizeTopic('dataengineering')).toBe('data-engineering');
+      expect(normalizeTopic('data_science')).toBe('data-science');
+      expect(normalizeTopic('goodbyedpi')).toBe('goodbye-dpi');
+      expect(normalizeTopic('speechrecognition')).toBe('speech-recognition');
+      expect(normalizeTopic('apachespark')).toBe('spark');
+    });
+
+    it('authoritatively classifies repos with strong domain signals even when topics are sparse', () => {
+      const whisperRepo = normalizeRepo({
+        id: 10,
+        name: 'whisper',
+        full_name: 'openai/whisper',
+        description: 'Robust Speech Recognition via Large-Scale Weak Supervision',
+        topics: [],
+        language: 'Python',
+        stargazers_count: 109000,
+        html_url: 'https://github.com/openai/whisper',
+        updated_at: '2026-01-01T00:00:00Z',
+      });
+      const res = classifyWithRules(whisperRepo);
+      expect(res?.category).toBe('ML / AI');
+      expect(res?.method).toBe('rule');
+    });
+
+    it('allows strong domain signals to beat weak incidental signals (e.g. data-engineer-handbook)', () => {
+      const handbookRepo = normalizeRepo({
+        id: 11,
+        name: 'data-engineer-handbook',
+        full_name: 'DataExpert-io/data-engineer-handbook',
+        description: "This is a repo with links to everything you'd ever want to learn about data engineering",
+        topics: ['apachespark', 'awesome', 'bigdata', 'data', 'dataengineering', 'sql'],
+        language: 'Jupyter Notebook',
+        stargazers_count: 25000,
+        html_url: 'https://github.com/DataExpert-io/data-engineer-handbook',
+        updated_at: '2026-01-01T00:00:00Z',
+      });
+      const res = classifyWithRules(handbookRepo);
+      expect(res?.category).toBe('Data Engineering');
+      expect(res?.method).toBe('rule');
+    });
+  });
+
+  describe('Intent vs Domain Decoupled Classification Architecture', () => {
+    it('1. caps domain topic contribution at exactly 6 points regardless of topic quantity', () => {
+      const manyAiTopics = [
+        'pytorch', 'tensorflow', 'llm', 'deep-learning', 'rag',
+        'machine-learning', 'nlp', 'transformers', 'diffusion', 'langchain'
+      ];
+      const scores = scoreDomainsWithSaturation(manyAiTopics, [], '', '');
+      // 1st topic = 3, 2nd = 2, 3rd = 1, subsequent = 0 => Total = 6
+      expect(scores.ai.score).toBe(6);
+      expect(scores.ai.matchedTopics.length).toBe(10);
+    });
+
+    it('2. prioritizes educational intent over strong AI domain signals', () => {
+      const repo = normalizeRepo({
+        id: 201,
+        name: 'ai-curriculum',
+        full_name: 'edu-org/ai-curriculum',
+        description: 'Comprehensive tutorials and curriculum for learning deep learning and neural networks',
+        topics: ['pytorch', 'tensorflow', 'deep-learning', 'llm', 'tutorial', 'curriculum'],
+        language: 'Jupyter Notebook',
+        stargazers_count: 10000,
+        html_url: 'https://github.com/edu-org/ai-curriculum',
+        updated_at: '2026-01-01T00:00:00Z',
+      });
+      const res = classifyWithRules(repo);
+      expect(res).not.toBeNull();
+      expect(res?.category).toBe('Learning / Docs');
+    });
+
+    it('3. prioritizes executable tool intent over AI domain signals', () => {
+      const repo = normalizeRepo({
+        id: 202,
+        name: 'ai-terminal-cli',
+        full_name: 'tools-dev/ai-terminal-cli',
+        description: 'A command line interface tool and terminal utility for chatting with LLMs',
+        topics: ['cli', 'terminal', 'utility', 'llm', 'genai', 'gemini'],
+        language: 'Go',
+        stargazers_count: 5000,
+        html_url: 'https://github.com/tools-dev/ai-terminal-cli',
+        updated_at: '2026-01-01T00:00:00Z',
+      });
+      const res = classifyWithRules(repo);
+      expect(res).not.toBeNull();
+      expect(res?.category).toBe('CLI / Tools');
+    });
+
+    it('4. prioritizes interactive web frontend intent over AI domain signals', () => {
+      const repo = normalizeRepo({
+        id: 203,
+        name: 'llm-weights-visualizer',
+        full_name: 'ui-team/llm-weights-visualizer',
+        description: 'Interactive web frontend visualizer and UI for inspecting neural network weights',
+        topics: ['react', 'frontend', 'visualization', 'visualizer', 'web-app', 'llm', 'deep-learning'],
+        language: 'TypeScript',
+        stargazers_count: 3500,
+        html_url: 'https://github.com/ui-team/llm-weights-visualizer',
+        updated_at: '2026-01-01T00:00:00Z',
+      });
+      const res = classifyWithRules(repo);
+      expect(res).not.toBeNull();
+      expect(res?.category).toBe('Web Frontend');
+    });
+
+    it('5. prioritizes workflow orchestration platform over AI domain signals', () => {
+      const repo = normalizeRepo({
+        id: 204,
+        name: 'agent-workflow-engine',
+        full_name: 'infra/agent-workflow-engine',
+        description: 'Self-hosted workflow automation platform and orchestrator integrating AI agents',
+        topics: ['workflow-automation', 'orchestration', 'self-hosted', 'agents', 'llm'],
+        language: 'TypeScript',
+        stargazers_count: 8500,
+        html_url: 'https://github.com/infra/agent-workflow-engine',
+        updated_at: '2026-01-01T00:00:00Z',
+      });
+      const res = classifyWithRules(repo);
+      expect(res).not.toBeNull();
+      expect(res?.category).toBe('DevOps / Infra');
+    });
+
+    it('6. classifies core model and algorithm implementations as ML / AI', () => {
+      const repo = normalizeRepo({
+        id: 205,
+        name: 'whisper-transcription-engine',
+        full_name: 'audio/whisper-transcription-engine',
+        description: 'Zero-shot speech recognition deep learning model and inference algorithm',
+        topics: ['speech-recognition', 'deep-learning', 'inference'],
+        language: 'Python',
+        stargazers_count: 45000,
+        html_url: 'https://github.com/audio/whisper-transcription-engine',
+        updated_at: '2026-01-01T00:00:00Z',
+      });
+      const res = classifyWithRules(repo);
+      expect(res).not.toBeNull();
+      expect(res?.category).toBe('ML / AI');
+    });
+
+    it('7. assigns high confidence to authoritative multi-word phrases and clear structural intent', () => {
+      const repo = normalizeRepo({
+        id: 206,
+        name: 'system-debloater',
+        full_name: 'admin/system-debloater',
+        description: 'Command line interface system utility tool for converting and tweaking systems',
+        topics: ['cli', 'system-utility', 'tweaks'],
+        language: 'PowerShell',
+        stargazers_count: 6000,
+        html_url: 'https://github.com/admin/system-debloater',
+        updated_at: '2026-01-01T00:00:00Z',
+      });
+      const res = classifyWithRules(repo);
+      expect(res).not.toBeNull();
+      expect(res?.confidence).toBeGreaterThanOrEqual(0.93);
+    });
+
+    it('8. routes sparse metadata repositories to fallback (returns null from deterministic rules)', () => {
+      const repo = normalizeRepo({
+        id: 207,
+        name: 'my-random-project',
+        full_name: 'anon/my-random-project',
+        description: 'A simple script that does stuff',
+        topics: [],
+        language: 'Python',
+        stargazers_count: 2,
+        html_url: 'https://github.com/anon/my-random-project',
+        updated_at: '2026-01-01T00:00:00Z',
+      });
+      const res = classifyWithRules(repo);
+      expect(res).toBeNull();
+    });
+
+    it('9. produces deterministic results across multiple evaluations of boundary repos', () => {
+      const repo = normalizeRepo({
+        id: 208,
+        name: 'data-pipeline-tutorial',
+        full_name: 'study/data-pipeline-tutorial',
+        description: 'Tutorial covering ETL pipeline concepts and data engineering principles',
+        topics: ['etl', 'tutorial', 'data-pipeline'],
+        language: 'Python',
+        stargazers_count: 1200,
+        html_url: 'https://github.com/study/data-pipeline-tutorial',
+        updated_at: '2026-01-01T00:00:00Z',
+      });
+      const res1 = classifyWithRules(repo);
+      const res2 = classifyWithRules(repo);
+      const res3 = classifyWithRules(repo);
+      expect(res1).toEqual(res2);
+      expect(res2).toEqual(res3);
+    });
+
+    it('10. preserves canonical categories across all active categories in regression check', () => {
+      const sampleNames = [
+        { name: 'goodbyedpi', topics: ['security', 'goodbye-dpi'], expected: 'Security' },
+        { name: 'sdmaid-cleaner', topics: ['android', 'cleaner'], expected: 'Mobile' },
+        { name: 'twikit-scraper', topics: ['twitter-api', 'api-client'], expected: 'Backend / API' },
+        { name: 'microgpt-visualizer', topics: ['frontend', 'visualization'], expected: 'Web Frontend' },
+        { name: 'k8s-platform', topics: ['kubernetes', 'terraform'], expected: 'DevOps / Infra' },
+        { name: 'missingno', topics: ['data-profiling', 'missing-data'], expected: 'Data Engineering' },
+        { name: 'winutil', topics: ['cli', 'utility'], expected: 'CLI / Tools' },
+        { name: 'python-cheatsheet', topics: ['cheatsheet', 'tutorial'], expected: 'Learning / Docs' },
+      ];
+
+      for (const sample of sampleNames) {
+        const repo = normalizeRepo({
+          id: 300,
+          name: sample.name,
+          full_name: `owner/${sample.name}`,
+          description: `Description for ${sample.name}`,
+          topics: sample.topics,
+          language: 'TypeScript',
+          stargazers_count: 100,
+          html_url: `https://github.com/owner/${sample.name}`,
+          updated_at: '2026-01-01T00:00:00Z',
+        });
+        const res = classifyWithRules(repo);
+        expect(res?.category).toBe(sample.expected);
+      }
+    });
   });
 
   describe('Classification Cache', () => {
@@ -178,6 +408,102 @@ describe('Data Pipeline', () => {
       };
 
       expect(computeInputHash(repoA)).not.toBe(computeInputHash(repoB));
+    });
+
+    it('returns empty cache when cache file does not exist', () => {
+      const nonExistent = resolve(process.cwd(), 'data', 'non-existent-cache.tmp.json');
+      const loaded = loadCache(nonExistent);
+      expect(loaded).toEqual({});
+    });
+
+    it('saves and reloads cache entries from disk atomically', () => {
+      const tempCache = resolve(process.cwd(), 'data', 'temp-cache-test.tmp.json');
+      const sample = {
+        'test/sample-repo': {
+          category: 'CLI / Tools' as const,
+          classification: {
+            method: 'rule' as const,
+            confidence: 0.95,
+            classifiedAt: '2026-01-01T00:00:00Z',
+            inputHash: 'hash123',
+          },
+        },
+      };
+
+      saveCache(sample, tempCache);
+      expect(existsSync(tempCache)).toBe(true);
+
+      const loaded = loadCache(tempCache);
+      expect(loaded['test/sample-repo']?.category).toBe('CLI / Tools');
+      expect(loaded['test/sample-repo']?.classification.inputHash).toBe('hash123');
+
+      try { unlinkSync(tempCache); } catch { /* ignore */ }
+    });
+  });
+
+  describe('Gemini Fallback & Error Resilience', () => {
+    it('does not invoke Gemini fallback for high-confidence deterministic classifications', async () => {
+      const repo = normalizeRepo({
+        id: 701,
+        name: 'whisper',
+        full_name: 'openai/whisper',
+        description: 'Robust speech recognition deep learning model',
+        topics: ['speech-recognition', 'deep-learning'],
+        language: 'Python',
+        stargazers_count: 50000,
+        html_url: 'https://github.com/openai/whisper',
+        updated_at: '2026-01-01T00:00:00Z',
+      });
+
+      // Passing an invalid dummy API key would throw if LLM were invoked
+      const res = await classifyRepo(repo, 'invalid-nonexistent-api-key');
+      expect(res.category).toBe('ML / AI');
+      expect(res.method).toBe('rule');
+      expect(res.confidence).toBeGreaterThanOrEqual(0.94);
+    });
+
+    it('safely handles missing GEMINI_API_KEY for ambiguous/sparse repositories without throwing', async () => {
+      const sparseRepo = normalizeRepo({
+        id: 702,
+        name: 'claw-code',
+        full_name: 'ultraworkers/claw-code',
+        description: 'An agent-managed museum exhibit, built in Rust with Gajae-Code / LazyCodex',
+        topics: [],
+        language: 'Rust',
+        stargazers_count: 1000,
+        html_url: 'https://github.com/ultraworkers/claw-code',
+        updated_at: '2026-01-01T00:00:00Z',
+      });
+
+      // Rule classification returns null for sparse metadata
+      const ruleRes = classifyWithRules(sparseRepo);
+      expect(ruleRes).toBeNull();
+
+      // Explicitly passing empty key simulates absent GEMINI_API_KEY
+      const res = await classifyRepo(sparseRepo, '');
+      expect(res.category).toBe('Other');
+      expect(res.method).toBe('fallback');
+      expect(res.confidence).toBe(0.5);
+    });
+
+    it('safely catches and recovers from Gemini API errors without crashing the pipeline', async () => {
+      const sparseRepo = normalizeRepo({
+        id: 703,
+        name: 'ambiguous-project',
+        full_name: 'anon/ambiguous-project',
+        description: 'An ambiguous experimental codebase',
+        topics: [],
+        language: 'C++',
+        stargazers_count: 5,
+        html_url: 'https://github.com/anon/ambiguous-project',
+        updated_at: '2026-01-01T00:00:00Z',
+      });
+
+      // Passing an invalid key will trigger an API error inside classifyWithLLM
+      const res = await classifyWithLLM(sparseRepo, 'invalid-key-that-causes-auth-error');
+      expect(res.category).toBe('Other');
+      expect(res.method).toBe('fallback');
+      expect(res.confidence).toBe(0.5);
     });
   });
 
@@ -467,6 +793,115 @@ describe('Data Pipeline', () => {
       // 4. Verify existing dataset is preserved and intact
       const existing = JSON.parse(readFileSync(testTarget, 'utf-8'));
       expect(existing).toEqual(validInitialData);
+    });
+  });
+
+  describe('Safe Local Dry Run & Production Flow', () => {
+    const dryRunTarget = resolve(process.cwd(), 'data', 'dryrun-repos.tmp.json');
+    const dryRunRaw = resolve(process.cwd(), 'data', 'dryrun-raw.tmp.json');
+
+    afterEach(() => {
+      [dryRunTarget, dryRunRaw].forEach(p => {
+        if (existsSync(p)) {
+          try { unlinkSync(p); } catch { /* ignore */ }
+        }
+      });
+    });
+
+    it('executes full classification pipeline dry run with cache reuse and schema validation', async () => {
+      // 1. Prepare raw fixture
+      const rawData = [
+        {
+          id: 66,
+          name: 'whisper',
+          fullName: 'openai/whisper',
+          owner: 'openai',
+          description: 'Robust Speech Recognition via Large-Scale Weak Supervision',
+          topics: ['speech-recognition', 'deep-learning'],
+          language: 'Python',
+          stars: 100000,
+          url: 'https://github.com/openai/whisper',
+          updatedAt: '2026-01-01T00:00:00Z',
+          archived: false,
+          fork: false,
+        },
+        {
+          id: 88,
+          name: 'custom-utility-cli',
+          fullName: 'org/custom-utility-cli',
+          owner: 'org',
+          description: 'A command line interface system utility tool for administration',
+          topics: ['cli', 'utility'],
+          language: 'Go',
+          stars: 50,
+          url: 'https://github.com/org/custom-utility-cli',
+          updatedAt: '2026-01-01T00:00:00Z',
+          archived: false,
+          fork: false,
+        },
+      ];
+
+      writeFileSync(dryRunRaw, JSON.stringify(rawData, null, 2), 'utf-8');
+
+      // 2. Run classification with safe dryRun paths
+      const result = await runClassification(dryRunRaw, dryRunTarget);
+
+      // 3. Verify results
+      expect(result.length).toBe(2);
+      expect(existsSync(dryRunTarget)).toBe(true);
+
+      const whisper = result.find(r => r.name === 'whisper');
+      expect(whisper?.category).toBe('ML / AI');
+      expect(whisper?.classification.method).toBe('rule');
+
+      const tool = result.find(r => r.name === 'custom-utility-cli');
+      expect(tool?.category).toBe('CLI / Tools');
+      expect(tool?.classification.method).toBe('rule');
+
+      // 4. Verify validation passes on generated dataset
+      const validation = validateRepos(result);
+      expect(validation.valid).toBe(true);
+      expect(validation.errors.length).toBe(0);
+    });
+
+    it('invalidates cache entry and reclassifies when repository metadata changes', async () => {
+      // 1. Initial run: CLI tool
+      const rawInitial = [
+        {
+          id: 99,
+          name: 'changing-app',
+          fullName: 'user/changing-app',
+          owner: 'user',
+          description: 'A command line interface tool and utility',
+          topics: ['cli', 'utility'],
+          language: 'Go',
+          stars: 10,
+          url: 'https://github.com/user/changing-app',
+          updatedAt: '2026-01-01T00:00:00Z',
+          archived: false,
+          fork: false,
+        },
+      ];
+      writeFileSync(dryRunRaw, JSON.stringify(rawInitial, null, 2), 'utf-8');
+      const res1 = await runClassification(dryRunRaw, dryRunTarget);
+      expect(res1[0].category).toBe('CLI / Tools');
+      const hash1 = res1[0].classification.inputHash;
+
+      // 2. Metadata changes: transformed into an interactive web frontend visualizer
+      const rawUpdated = [
+        {
+          ...rawInitial[0],
+          description: 'Interactive web frontend visualizer and UI dashboard',
+          topics: ['frontend', 'react', 'visualization', 'web-app'],
+          language: 'TypeScript',
+        },
+      ];
+      writeFileSync(dryRunRaw, JSON.stringify(rawUpdated, null, 2), 'utf-8');
+      const res2 = await runClassification(dryRunRaw, dryRunTarget);
+      expect(res2[0].category).toBe('Web Frontend');
+      const hash2 = res2[0].classification.inputHash;
+
+      expect(hash1).not.toBe(hash2);
     });
   });
 });

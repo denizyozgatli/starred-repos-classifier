@@ -1,0 +1,212 @@
+[
+  {
+    "fullName": "langchain-ai/langchain",
+    "expectedCategory": "ML / AI",
+    "confidenceLevel": "high",
+    "rationale": "Agent engineering platform, LLM framework and multiagent tooling",
+    "evidenceSource": "topics: [agents, ai, langchain, llm, rag], desc: The agent engineering platform"
+  },
+  {
+    "fullName": "deepfakes/faceswap",
+    "expectedCategory": "ML / AI",
+    "confidenceLevel": "high",
+    "rationale": "Deep learning facial swap and neural network tools",
+    "evidenceSource": "topics: [deep-learning, machine-learning, neural-networks]"
+  },
+  {
+    "fullName": "shap/shap",
+    "expectedCategory": "ML / AI",
+    "confidenceLevel": "high",
+    "rationale": "Game theoretic approach to explain machine learning models",
+    "evidenceSource": "topics: [deep-learning, machine-learning, shap]"
+  },
+  {
+    "fullName": "hacksider/Deep-Live-Cam",
+    "expectedCategory": "ML / AI",
+    "confidenceLevel": "high",
+    "rationale": "Real-time AI deepfake face swap with single image",
+    "evidenceSource": "topics: [ai, deep-fake, gan, realtime]"
+  },
+  {
+    "fullName": "Shubhamsaboo/awesome-llm-apps",
+    "expectedCategory": "ML / AI",
+    "confidenceLevel": "high",
+    "rationale": "Collection of AI agents, skills and RAG applications",
+    "evidenceSource": "topics: [agents, llms, rag]"
+  },
+  {
+    "fullName": "scikit-learn-contrib/imbalanced-learn",
+    "expectedCategory": "ML / AI",
+    "confidenceLevel": "high",
+    "rationale": "Machine learning package for imbalanced classification",
+    "evidenceSource": "topics: [machine-learning, statistics], desc: Machine Learning"
+  },
+  {
+    "fullName": "EpistasisLab/tpot",
+    "expectedCategory": "ML / AI",
+    "confidenceLevel": "high",
+    "rationale": "AutoML tool optimizing machine learning pipelines",
+    "evidenceSource": "topics: [automl, machine-learning, scikit-learn]"
+  },
+  {
+    "fullName": "eriklindernoren/ML-From-Scratch",
+    "expectedCategory": "ML / AI",
+    "confidenceLevel": "high",
+    "rationale": "Implementations of machine learning and deep learning algorithms from scratch",
+    "evidenceSource": "topics: [deep-learning, machine-learning]"
+  },
+  {
+    "fullName": "instantX-research/InstantID",
+    "expectedCategory": "ML / AI",
+    "confidenceLevel": "high",
+    "rationale": "Diffusion-based identity-preserving generative AI model",
+    "evidenceSource": "desc: Zero-shot Identity-Preserving Generation in Seconds"
+  },
+  {
+    "fullName": "openai/whisper",
+    "expectedCategory": "ML / AI",
+    "confidenceLevel": "high",
+    "rationale": "OpenAI speech recognition deep learning model",
+    "evidenceSource": "desc: Robust Speech Recognition via Large-Scale Weak Supervision"
+  },
+  {
+    "fullName": "microsoft/mcp-for-beginners",
+    "expectedCategory": "Learning / Docs",
+    "confidenceLevel": "high",
+    "rationale": "Curriculum introducing Model Context Protocol with practical tutorials",
+    "evidenceSource": "desc: This open-source curriculum introduces the fundamentals of Model Context Protocol"
+  },
+  {
+    "fullName": "ChrisTitusTech/winutil",
+    "expectedCategory": "CLI / Tools",
+    "confidenceLevel": "high",
+    "rationale": "Windows system administration utility tool for installing software and tweaks",
+    "evidenceSource": "desc: Chris Titus Tech's Windows Utility - Install Programs, Tweaks, Fixes, and Updates"
+  },
+  {
+    "fullName": "cagritaskn/GoodbyeDPI-Turkey",
+    "expectedCategory": "Security",
+    "confidenceLevel": "high",
+    "rationale": "Deep packet inspection circumvention and DNS security bypass tool",
+    "evidenceSource": "topics: [dns, goodbyedpi], desc: GoodbyeDPI (DNS degisikligi engelini bertaraf etme)"
+  },
+  {
+    "fullName": "d60/twikit",
+    "expectedCategory": "Backend / API",
+    "confidenceLevel": "high",
+    "rationale": "API client library and HTTP scraper wrapper for Twitter REST endpoints",
+    "evidenceSource": "topics: [twitter-api, client, wrapper, api], desc: Twitter API Scraper / Twitter Internal API"
+  },
+  {
+    "fullName": "ResidentMario/missingno",
+    "expectedCategory": "Data Engineering",
+    "confidenceLevel": "high",
+    "rationale": "Data visualization and missing-value profiling library for tabular datasets",
+    "evidenceSource": "topics: [data-analysis, missing-data, pandas], desc: Missing data visualization module for Python"
+  },
+  {
+    "fullName": "mertskaplan/multitv",
+    "expectedCategory": "Web Frontend",
+    "confidenceLevel": "high",
+    "rationale": "Web frontend application for watching multiple concurrent live TV streams",
+    "evidenceSource": "topics: [multiscreen, youtube, television], desc: watch many television news channels at the same time via YouTube"
+  },
+  {
+    "fullName": "jakevdp/PythonDataScienceHandbook",
+    "expectedCategory": "Learning / Docs",
+    "confidenceLevel": "high",
+    "rationale": "Educational handbook and tutorial notebooks on Python data science",
+    "evidenceSource": "topics: [jupyter-notebook, scikit-learn, pandas], desc: Python Data Science Handbook: full text in Jupyter Notebooks"
+  },
+  {
+    "fullName": "microsoft/Data-Science-For-Beginners",
+    "expectedCategory": "Learning / Docs",
+    "confidenceLevel": "high",
+    "rationale": "10-week educational course and lessons on data science",
+    "evidenceSource": "topics: [data-science, microsoft-for-beginners], desc: 10 Weeks, 20 Lessons, Data Science for All!"
+  },
+  {
+    "fullName": "sundowndev/phoneinfoga",
+    "expectedCategory": "Security",
+    "confidenceLevel": "high",
+    "rationale": "OSINT information reconnaissance and security footprinting framework",
+    "evidenceSource": "topics: [information-gathering, osint, reconnaissance, footprint]"
+  },
+  {
+    "fullName": "heliomarpm/udemy-downloader-gui",
+    "expectedCategory": "CLI / Tools",
+    "confidenceLevel": "high",
+    "rationale": "Desktop utility software tool for downloading educational course videos",
+    "evidenceSource": "topics: [desktop-app, downloader, electron], desc: A desktop application for downloading Udemy Courses"
+  },
+  {
+    "fullName": "sindresorhus/awesome",
+    "expectedCategory": "Learning / Docs",
+    "confidenceLevel": "high",
+    "rationale": "Canonical curated lists of developer resources and guides",
+    "evidenceSource": "topics: [awesome, awesome-list, lists, resources]"
+  },
+  {
+    "fullName": "practical-tutorials/project-based-learning",
+    "expectedCategory": "Learning / Docs",
+    "confidenceLevel": "high",
+    "rationale": "Curated directory of programming tutorials and educational projects",
+    "evidenceSource": "topics: [tutorial, project, beginner-project], desc: Curated list of project-based tutorials"
+  },
+  {
+    "fullName": "gto76/python-cheatsheet",
+    "expectedCategory": "Learning / Docs",
+    "confidenceLevel": "high",
+    "rationale": "Comprehensive reference guide and cheatsheet for Python",
+    "evidenceSource": "topics: [cheatsheet, reference], desc: Comprehensive Python Cheatsheet"
+  },
+  {
+    "fullName": "jackfrued/Python-100-Days",
+    "expectedCategory": "Learning / Docs",
+    "confidenceLevel": "high",
+    "rationale": "Step-by-step tutorial curriculum: 100 days from novice to master",
+    "evidenceSource": "desc: Python - 100天从新手到大师"
+  },
+  {
+    "fullName": "josephmisiti/awesome-machine-learning",
+    "expectedCategory": "Learning / Docs",
+    "confidenceLevel": "high",
+    "rationale": "Curated directory of machine learning frameworks, libraries and software",
+    "evidenceSource": "desc: A curated list of awesome Machine Learning frameworks, libraries and software"
+  },
+  {
+    "fullName": "Free-TV/IPTV",
+    "expectedCategory": "Other",
+    "confidenceLevel": "boundary",
+    "rationale": "Curated M3U playlist file collection for TV channels; non-software media asset collection legitimately fitting Other",
+    "evidenceSource": "desc: M3U Playlist for free TV channels"
+  },
+  {
+    "fullName": "DataExpert-io/data-engineer-handbook",
+    "expectedCategory": "Data Engineering",
+    "confidenceLevel": "boundary",
+    "rationale": "Curriculum repository covering data engineering concepts, tools and pipelines; boundary between Data Engineering and Learning / Docs",
+    "evidenceSource": "topics: [apachespark, bigdata, dataengineering, sql], desc: links to everything you'd ever want to learn about data engineering"
+  },
+  {
+    "fullName": "launchiamenterprise/keyrunner",
+    "expectedCategory": "CLI / Tools",
+    "confidenceLevel": "boundary",
+    "rationale": "API runtime and testing tool with secret protection; boundary between CLI / Tools and Security",
+    "evidenceSource": "topics: [cli, developer-tool, secrets-management], desc: Governed API and agent runtime for desktop, VS Code, and CLI"
+  },
+  {
+    "fullName": "t3gemstone/hardware",
+    "expectedCategory": "Other",
+    "confidenceLevel": "boundary",
+    "rationale": "PCB designs and electrical schematics; physical hardware engineering outside software classification",
+    "evidenceSource": "desc: This repository contains pcb and hardware related assets"
+  },
+  {
+    "fullName": "linkedin/luminol",
+    "expectedCategory": "Data Engineering",
+    "confidenceLevel": "boundary",
+    "rationale": "Time-series data anomaly detection and correlation analysis; boundary between Data Engineering and ML / AI",
+    "evidenceSource": "topics: [anomaly-detection], desc: Anomaly Detection and Correlation library"
+  }
+]

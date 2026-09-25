@@ -12,7 +12,9 @@
     "pipeline:fetch": "tsx scripts/fetch.ts",
     "pipeline:classify": "tsx scripts/classify.ts",
     "pipeline:validate": "tsx scripts/validate.ts",
-    "pipeline:run": "tsx scripts/run-pipeline.ts"
+    "pipeline:run": "tsx scripts/run-pipeline.ts",
+    "evaluate": "tsx scripts/evaluate-classifier.ts",
+    "evaluate:unseen": "tsx scripts/evaluate-unseen.ts"
   },
   "dependencies": {
     "fuse.js": "^7.1.0",

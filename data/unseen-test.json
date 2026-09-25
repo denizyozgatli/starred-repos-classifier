@@ -1,0 +1,326 @@
+[
+  {
+    "fullName": "FroggMaster/CreamInstaller",
+    "expectedCategory": "CLI / Tools",
+    "confidence": "medium",
+    "rationale": "Desktop utility tool that scans game store installations and manages DLC unlocker files through a GUI",
+    "evidence": [
+      "description: Automatically finds all installed Steam, Epic and Ubisoft games... provides a graphical interface for maintenance",
+      "language: C#"
+    ]
+  },
+  {
+    "fullName": "cobanov/awesome-jev",
+    "expectedCategory": "Learning / Docs",
+    "confidence": "high",
+    "rationale": "Curated awesome resource list of projects built with Jev and TypeSafe AI",
+    "evidence": [
+      "description: A curated, source-backed list of projects built with Jev",
+      "topics: awesome, awesome-list, typesafe-ai, ai-agents"
+    ]
+  },
+  {
+    "fullName": "nilbuild/developer-roadmap",
+    "expectedCategory": "Learning / Docs",
+    "confidence": "high",
+    "rationale": "Educational developer career guide and interactive roadmaps across engineering disciplines",
+    "evidence": [
+      "description: Interactive roadmaps, guides and other educational content to help developers grow in their careers",
+      "topics: developer-roadmap, frontend-roadmap, backend-roadmap, devops-roadmap, roadmap"
+    ]
+  },
+  {
+    "fullName": "microsoft/markitdown",
+    "expectedCategory": "CLI / Tools",
+    "confidence": "boundary",
+    "rationale": "File conversion utility tool for transforming office documents and PDFs into Markdown; boundary with Data Engineering",
+    "evidence": [
+      "description: Python tool for converting files and office documents to Markdown",
+      "topics: autogen, autogen-extension, langchain, markdown, pdf",
+      "language: Python"
+    ]
+  },
+  {
+    "fullName": "NawfalMotii79/PLFM_RADAR",
+    "expectedCategory": "Other",
+    "confidence": "high",
+    "rationale": "Hardware phased array radar system design; non-software domain outside web/data/cloud software categories",
+    "evidence": [
+      "description: Open-source, low-cost 10.5 GHz PLFM phased array RADAR system",
+      "topics: []"
+    ]
+  },
+  {
+    "fullName": "Raphire/Win11Debloat",
+    "expectedCategory": "CLI / Tools",
+    "confidence": "high",
+    "rationale": "System administration PowerShell utility script for Windows debloating and registry tweaks",
+    "evidence": [
+      "description: A simple, lightweight PowerShell script that allows you to remove pre-installed apps... customize your Windows experience",
+      "topics: cli, debloat, optimize, powershell, registry-tweaks, tweaks, windows",
+      "language: PowerShell"
+    ]
+  },
+  {
+    "fullName": "ultraworkers/claw-code",
+    "expectedCategory": "ML / AI",
+    "confidence": "boundary",
+    "rationale": "Autonomous AI agent experimental codebase developed and maintained without human intervention",
+    "evidence": [
+      "description: An agent-managed museum exhibit, built in Rust with Gajae-Code / LazyCodex — developed and maintained with no human intervention",
+      "language: Rust",
+      "topics: []"
+    ]
+  },
+  {
+    "fullName": "x1xhlol/system-prompts-and-models-of-ai-tools",
+    "expectedCategory": "Learning / Docs",
+    "confidence": "medium",
+    "rationale": "Reference collection and documentation archive of system prompts and internal AI model specifications",
+    "evidence": [
+      "description: FULL Augment Code, Claude Code... System Prompts, Internal Tools & AI Models",
+      "topics: system-prompts, ai, cursor, devin, github-copilot"
+    ]
+  },
+  {
+    "fullName": "accomplish-ai/coworker",
+    "expectedCategory": "Other",
+    "confidence": "high",
+    "rationale": "Repository contains no description, language metadata, or topics; unclassifiable from available metadata",
+    "evidence": [
+      "description: none",
+      "topics: []",
+      "language: none"
+    ]
+  },
+  {
+    "fullName": "alicankiraz1/Ai-Arastirma-Okumalarim-TR",
+    "expectedCategory": "Learning / Docs",
+    "confidence": "medium",
+    "rationale": "Educational reading notes and Turkish translations of AI research papers and deep dive documents",
+    "evidence": [
+      "description: Ai konusunda yayınlanan makale ve araştırmaların Türkçe detaylı-açıklamalı çevirilerine ve Türkçe Ai'a hazırlattığım Derin Araştırma Dökümanlarıma ulaşabilirsiniz",
+      "topics: []"
+    ]
+  },
+  {
+    "fullName": "patchy631/ai-engineering-hub",
+    "expectedCategory": "Learning / Docs",
+    "confidence": "high",
+    "rationale": "Comprehensive tutorial repository focusing on LLM development, RAG, and AI agent engineering",
+    "evidence": [
+      "description: In-depth tutorials on LLMs, RAGs and real-world AI agent applications",
+      "topics: agents, ai, llms, machine-learning, mcp, rag",
+      "language: Jupyter Notebook"
+    ]
+  },
+  {
+    "fullName": "enescang/microgpt-visualizer",
+    "expectedCategory": "Web Frontend",
+    "confidence": "boundary",
+    "rationale": "Interactive web frontend visualization interface for GPT autograd mechanisms; boundary between Web Frontend and ML / AI",
+    "evidence": [
+      "description: Interactive visualization of a minimal GPT implementation with autograd engine",
+      "topics: autograd, educational, gpt, microgpt, transformer, visualization",
+      "language: TypeScript"
+    ]
+  },
+  {
+    "fullName": "f/prompts.chat",
+    "expectedCategory": "Learning / Docs",
+    "confidence": "medium",
+    "rationale": "Community prompt directory and collection resource (formerly Awesome ChatGPT Prompts); boundary with Web Frontend",
+    "evidence": [
+      "description: f.k.a. Awesome ChatGPT Prompts. Share, discover, and collect prompts from the community",
+      "topics: awesome-list, chatgpt, prompt-engineering, prompts, nextjs",
+      "language: HTML"
+    ]
+  },
+  {
+    "fullName": "iltekin/remove-local-temu",
+    "expectedCategory": "Other",
+    "confidence": "high",
+    "rationale": "Repository lacks any description or topics; cannot be reliably placed in a specific domain category",
+    "evidence": [
+      "description: none",
+      "topics: []",
+      "language: JavaScript"
+    ]
+  },
+  {
+    "fullName": "qeeqbox/social-analyzer",
+    "expectedCategory": "Security",
+    "confidence": "high",
+    "rationale": "Open Source Intelligence (OSINT) and penetration testing reconnaissance tool for discovering profiles",
+    "evidence": [
+      "description: API, CLI, and Web App for analyzing and finding a person's profile in 1000 social media websites",
+      "topics: osint, pentest, pentesting, reconnaissance, security-tools, information-gathering",
+      "language: JavaScript"
+    ]
+  },
+  {
+    "fullName": "vseprr/srt-smart-translator",
+    "expectedCategory": "ML / AI",
+    "confidence": "medium",
+    "rationale": "Natural Language Processing (NLP) subtitle translation tool using deep learning context models",
+    "evidence": [
+      "description: AI-powered SRT subtitle translator with context preservation",
+      "topics: deepl, flask, nlp, python, spacy, srt, translation",
+      "language: HTML"
+    ]
+  },
+  {
+    "fullName": "ykdojo/claude-code-tips",
+    "expectedCategory": "Learning / Docs",
+    "confidence": "high",
+    "rationale": "Educational tips, guidance, and workflow documentation for Claude Code developers",
+    "evidence": [
+      "description: 45+ tips for getting the most out of Claude Code, from basics to advanced",
+      "topics: tips-and-tricks, developer-tools, claude, claude-code",
+      "language: HTML"
+    ]
+  },
+  {
+    "fullName": "xai-org/x-algorithm",
+    "expectedCategory": "ML / AI",
+    "confidence": "boundary",
+    "rationale": "Recommendation algorithm and ranking machine learning pipeline powering Twitter/X feeds; boundary with Backend / API",
+    "evidence": [
+      "description: Algorithm powering the For You feed on X",
+      "language: Rust",
+      "topics: []"
+    ]
+  },
+  {
+    "fullName": "zen-browser/desktop",
+    "expectedCategory": "CLI / Tools",
+    "confidence": "medium",
+    "rationale": "Desktop application and web browser client built on Firefox platform; boundary with Web Frontend",
+    "evidence": [
+      "description: Welcome to a calmer internet",
+      "topics: firefox, firefox-based, firefox-browser, zen-browser",
+      "language: C++"
+    ]
+  },
+  {
+    "fullName": "rasbt/LLMs-from-scratch",
+    "expectedCategory": "ML / AI",
+    "confidence": "high",
+    "rationale": "Implementation of large language models and transformer architectures from scratch in PyTorch",
+    "evidence": [
+      "description: Implement a ChatGPT-like LLM in PyTorch from scratch, step by step",
+      "topics: llm, large-language-models, machine-learning, deep-learning, pytorch, transformers",
+      "language: Jupyter Notebook"
+    ]
+  },
+  {
+    "fullName": "n8n-io/n8n",
+    "expectedCategory": "DevOps / Infra",
+    "confidence": "boundary",
+    "rationale": "Self-hosted integration and workflow automation orchestration platform; boundary between DevOps and Backend / API",
+    "evidence": [
+      "description: Fair-code workflow automation platform with native AI capabilities... self-host or cloud, 400+ integrations",
+      "topics: automation, integration-framework, ipaas, workflow, workflow-automation, self-hosted",
+      "language: TypeScript"
+    ]
+  },
+  {
+    "fullName": "langchain-ai/rag-from-scratch",
+    "expectedCategory": "ML / AI",
+    "confidence": "high",
+    "rationale": "Retrieval Augmented Generation (RAG) implementation and educational exercises from LangChain",
+    "evidence": [
+      "name: rag-from-scratch",
+      "owner: langchain-ai",
+      "language: Jupyter Notebook"
+    ]
+  },
+  {
+    "fullName": "microsoft/ai-agents-for-beginners",
+    "expectedCategory": "Learning / Docs",
+    "confidence": "high",
+    "rationale": "18-lesson beginner course curriculum for building autonomous AI agents",
+    "evidence": [
+      "description: 18 Lessons to Get Started Building AI Agents",
+      "topics: agentic-ai, ai-agents, generative-ai, autogen",
+      "language: Jupyter Notebook"
+    ]
+  },
+  {
+    "fullName": "google-gemini/gemini-cli",
+    "expectedCategory": "CLI / Tools",
+    "confidence": "high",
+    "rationale": "Terminal CLI application bringing Gemini AI capabilities directly into the command line",
+    "evidence": [
+      "description: An open-source AI agent that brings the power of Gemini directly into your terminal",
+      "topics: cli, gemini, ai, gemini-api, mcp-client",
+      "language: TypeScript"
+    ]
+  },
+  {
+    "fullName": "Data-Centric-AI-Community/fg-data-profiling",
+    "expectedCategory": "Data Engineering",
+    "confidence": "high",
+    "rationale": "Data quality analysis, profiling, and exploratory data processing for Spark and Pandas DataFrames",
+    "evidence": [
+      "description: 1 Line of code data quality profiling & exploratory data analysis for Pandas and Spark DataFrames",
+      "topics: data-profiling, data-quality, data-science, data-analysis, big-data-analytics, pandas",
+      "language: Python"
+    ]
+  },
+  {
+    "fullName": "donnemartin/data-science-ipython-notebooks",
+    "expectedCategory": "Learning / Docs",
+    "confidence": "high",
+    "rationale": "Comprehensive tutorial notebook collection covering data science, deep learning, and big data fundamentals",
+    "evidence": [
+      "description: Data science Python notebooks: Deep learning (TensorFlow, Theano, Caffe, Keras), scikit-learn, Kaggle, big data...",
+      "topics: data-science, deep-learning, machine-learning, big-data, hadoop, spark, python",
+      "language: Python"
+    ]
+  },
+  {
+    "fullName": "msasanmh/DNSveil",
+    "expectedCategory": "Security",
+    "confidence": "high",
+    "rationale": "Anti-censorship and DPI bypass security utility supporting DNSCrypt, DoH, and encrypted lookups",
+    "evidence": [
+      "description: A DNS Client Supporting DNSCrypt, Anonymized DNSCrypt, DoH, DoT, UDP And TCP",
+      "topics: dnscrypt, anti-censorship, dpi-bypassing, goodbyedpi",
+      "language: C#"
+    ]
+  },
+  {
+    "fullName": "d4rken-org/sdmaid-se",
+    "expectedCategory": "Mobile",
+    "confidence": "high",
+    "rationale": "Native Android system cleaner and storage maintenance mobile application",
+    "evidence": [
+      "description: SD Maid 2/SE is Android's most thorough cleaning tool",
+      "topics: android, cleaner, cleaner-app, filemanager, system-cleaner",
+      "language: Kotlin"
+    ]
+  },
+  {
+    "fullName": "proletarius101/Insular",
+    "expectedCategory": "Mobile",
+    "confidence": "boundary",
+    "rationale": "Android application isolation sandbox for privacy and anti-surveillance; boundary between Mobile and Security",
+    "evidence": [
+      "description: Isolated your big brother. This is a mirror only",
+      "topics: android, anti-surveillance, sandbox, security",
+      "language: Java"
+    ]
+  },
+  {
+    "fullName": "adilkhash/Data-Engineering-HowTo",
+    "expectedCategory": "Learning / Docs",
+    "confidence": "boundary",
+    "rationale": "Curated educational list of resources for learning data engineering; boundary with Data Engineering",
+    "evidence": [
+      "description: A list of useful resources to learn Data Engineering from scratch",
+      "topics: data-engineering, data-pipeline, distributed-systems, cloud-providers",
+      "language: none"
+    ]
+  }
+]
