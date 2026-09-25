@@ -1,0 +1,35 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
+
+# Node modules
+node_modules
+dist
+dist-ssr
+*.local
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Environment secrets
+.env
+.env.*
+!.env.example
+
+# Local data cache and generated overrides (if temporary)
+# Note: data/repos.json and data/overrides.json are tracked or generated
+data/.cache.json
+
+# Local scripts
+powershell.bat
