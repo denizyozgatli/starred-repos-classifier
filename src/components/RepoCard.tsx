@@ -1,6 +1,7 @@
 import React from 'react';
 import { Star, GitFork, Archive, ExternalLink } from 'lucide-react';
 import type { Repository, RepositoryCategory } from '../types/repo.ts';
+import { getLanguageColor } from '../lib/languageColors.ts';
 
 interface RepoCardProps {
   repo: Repository;
@@ -40,40 +41,50 @@ function formatDate(dateStr: string): string {
 
 export const RepoCard: React.FC<RepoCardProps> = ({ repo }) => {
   const categoryStyle = CATEGORY_STYLES[repo.category] || CATEGORY_STYLES['Other'];
+  const languageColor = getLanguageColor(repo.language);
 
   return (
     <article
-      className="group relative flex flex-col justify-between p-4 bg-[#161b22] border border-[#30363d] rounded-xl hover:border-[#58a6ff]/60 hover:shadow-lg transition-all duration-150"
+      className="group relative flex flex-col justify-between p-4 bg-[#161b22] border border-[#30363d] rounded-xl hover:border-[#8b949e]/50 hover:bg-[#161b22]/90 hover:shadow-md transition-all duration-150 focus-within:ring-2 focus-within:ring-[#58a6ff] focus-within:border-transparent cursor-pointer"
     >
       <div>
-        {/* Header: Owner / Name & External Link */}
+        {/* Header: Owner / Name & External Link & Badges */}
         <div className="flex items-start justify-between gap-2 mb-2">
-          <h2 className="text-base font-semibold leading-snug break-words">
+          <h2 className="text-base leading-snug break-words">
             <a
               href={repo.url}
               target="_blank"
               rel="noopener noreferrer"
-              className="text-[#58a6ff] hover:underline focus:outline-none focus:ring-1 focus:ring-[#58a6ff] rounded flex items-center gap-1.5"
+              className="inline-flex items-center gap-1.5 focus:outline-none after:absolute after:inset-0 after:rounded-xl after:content-['']"
+              aria-label={`${repo.fullName} (opens in new tab)`}
             >
-              <span>{repo.fullName}</span>
-              <ExternalLink className="w-3.5 h-3.5 opacity-0 group-hover:opacity-100 transition-opacity shrink-0" />
+              <span className="text-[#8b949e] font-normal">{repo.owner}</span>
+              <span className="text-[#8b949e] font-normal">/</span>
+              <span className="text-white font-semibold group-hover:text-[#58a6ff] transition-colors">
+                {repo.name}
+              </span>
+              <ExternalLink
+                className="w-3.5 h-3.5 text-[#8b949e] group-hover:text-[#58a6ff] transition-colors shrink-0"
+                aria-hidden="true"
+              />
             </a>
           </h2>
-          <div className="flex items-center gap-1 shrink-0">
+
+          <div className="flex items-center gap-1 shrink-0 relative z-10 pointer-events-none">
             {repo.archived && (
               <span
                 title="Archived repository"
-                className="inline-flex items-center gap-0.5 px-1.5 py-0.5 text-[10px] font-medium bg-amber-500/10 text-amber-400 border border-amber-500/30 rounded"
+                className="inline-flex items-center gap-0.5 px-1.5 py-0.5 text-[10px] font-medium bg-amber-500/10 text-amber-400 border border-amber-500/30 rounded select-none"
               >
-                <Archive className="w-2.5 h-2.5" /> archived
+                <Archive className="w-2.5 h-2.5" aria-hidden="true" /> archived
               </span>
             )}
             {repo.fork && (
               <span
                 title="Forked repository"
-                className="inline-flex items-center gap-0.5 px-1.5 py-0.5 text-[10px] font-medium bg-blue-500/10 text-blue-400 border border-blue-500/30 rounded"
+                className="inline-flex items-center gap-0.5 px-1.5 py-0.5 text-[10px] font-medium bg-blue-500/10 text-blue-400 border border-blue-500/30 rounded select-none"
               >
-                <GitFork className="w-2.5 h-2.5" /> fork
+                <GitFork className="w-2.5 h-2.5" aria-hidden="true" /> fork
               </span>
             )}
           </div>
@@ -84,19 +95,19 @@ export const RepoCard: React.FC<RepoCardProps> = ({ repo }) => {
           {repo.description || 'No description provided.'}
         </p>
 
-        {/* Topics */}
+        {/* Topics (Clean non-interactive metadata badges) */}
         {repo.topics.length > 0 && (
-          <div className="flex flex-wrap gap-1 mb-3">
+          <div className="flex flex-wrap gap-1.5 mb-3 select-none relative z-10 pointer-events-none">
             {repo.topics.slice(0, 4).map(topic => (
               <span
                 key={topic}
-                className="px-1.5 py-0.5 text-[10px] font-mono text-[#58a6ff] bg-[#1f6feb]/10 rounded hover:bg-[#1f6feb]/20 transition-colors"
+                className="px-1.5 py-0.5 text-[10px] font-mono text-[#8b949e] bg-[#21262d] border border-[#30363d]/60 rounded"
               >
-                {topic}
+                #{topic}
               </span>
             ))}
             {repo.topics.length > 4 && (
-              <span className="text-[10px] text-github-muted self-center">
+              <span className="text-[10px] text-github-muted self-center font-mono">
                 +{repo.topics.length - 4}
               </span>
             )}
@@ -104,9 +115,9 @@ export const RepoCard: React.FC<RepoCardProps> = ({ repo }) => {
         )}
       </div>
 
-      {/* Footer: Metadata Badges */}
-      <div className="flex items-center justify-between pt-3 border-t border-[#21262d] text-xs">
-        <div className="flex items-center gap-2">
+      {/* Footer: Metadata Badges (Responsive Wrap Layout) */}
+      <div className="flex flex-wrap items-center justify-between gap-y-2 pt-3 border-t border-[#21262d] text-xs">
+        <div className="flex flex-wrap items-center gap-2">
           {/* Category Badge */}
           <span
             className={`px-2 py-0.5 text-[11px] font-medium rounded-full border ${categoryStyle.bg} ${categoryStyle.text} ${categoryStyle.border}`}
@@ -114,23 +125,31 @@ export const RepoCard: React.FC<RepoCardProps> = ({ repo }) => {
             {repo.category}
           </span>
 
-          {/* Language */}
+          {/* Language with genuine GitHub Linguist color */}
           {repo.language && (
-            <span className="inline-flex items-center gap-1 text-[11px] text-github-muted">
-              <span className="w-2 h-2 rounded-full bg-[#58a6ff]/80" />
-              {repo.language}
+            <span className="inline-flex items-center gap-1.5 text-[11px] text-github-muted">
+              <span
+                className="w-2 h-2 rounded-full shrink-0"
+                style={{ backgroundColor: languageColor }}
+                aria-hidden="true"
+              />
+              <span>{repo.language}</span>
             </span>
           )}
         </div>
 
         {/* Stars count & Updated date */}
-        <div className="flex items-center gap-3 text-github-muted font-medium">
-          <span className="text-[11px] text-github-muted font-normal">
+        <div className="flex items-center gap-2.5 text-github-muted ml-auto sm:ml-0">
+          <span className="text-[11px] text-github-muted font-normal whitespace-nowrap">
             Updated {formatDate(repo.updatedAt)}
           </span>
-          <div className="flex items-center gap-1">
-            <Star className="w-3.5 h-3.5 text-[#e3b341] fill-[#e3b341]" />
-            <span>{formatStars(repo.stars)}</span>
+          <div
+            className="inline-flex items-center gap-1 font-medium text-white/90 bg-[#21262d] px-2 py-0.5 rounded border border-[#30363d] cursor-help"
+            title={`${repo.stars.toLocaleString()} stars`}
+            aria-label={`${repo.stars.toLocaleString()} stars`}
+          >
+            <Star className="w-3 h-3 text-[#e3b341] fill-[#e3b341]" aria-hidden="true" />
+            <span className="text-[11px]">{formatStars(repo.stars)}</span>
           </div>
         </div>
       </div>

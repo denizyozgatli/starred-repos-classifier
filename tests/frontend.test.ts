@@ -221,4 +221,24 @@ describe('Frontend Logic', () => {
       expect(state.sortBy).toBe('relevance');
     });
   });
+
+  describe('Language Colors', () => {
+    it('returns canonical colors for known languages', async () => {
+      const { getLanguageColor } = await import('../src/lib/languageColors.ts');
+      expect(getLanguageColor('Python')).toBe('#3572A5');
+      expect(getLanguageColor('TypeScript')).toBe('#3178c6');
+      expect(getLanguageColor('JavaScript')).toBe('#f1e05a');
+      expect(getLanguageColor('Rust')).toBe('#dea584');
+      expect(getLanguageColor('C#')).toBe('#178600');
+      expect(getLanguageColor('HTML')).toBe('#e34c26');
+      expect(getLanguageColor('Jupyter Notebook')).toBe('#DA5B0B');
+    });
+
+    it('falls back to neutral color for undefined or unknown language', async () => {
+      const { getLanguageColor } = await import('../src/lib/languageColors.ts');
+      expect(getLanguageColor(undefined)).toBe('#8b949e');
+      expect(getLanguageColor(null)).toBe('#8b949e');
+      expect(getLanguageColor('UnknownLangXYZ')).toBe('#8b949e');
+    });
+  });
 });

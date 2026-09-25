@@ -91,13 +91,15 @@ export default function App() {
     setSortBy('relevance');
   }, []);
 
+  const hasActiveFilters = selectedCategories.length > 0 || selectedLanguages.length > 0;
+
   return (
-    <div className="min-h-screen bg-[#0d1117] text-[#c9d1d9] flex flex-col font-sans">
+    <div className="min-h-screen bg-[#0d1117] text-[#c9d1d9] flex flex-col font-sans selection:bg-[#1f6feb] selection:text-white">
       <Header totalCount={repos.length} filteredCount={filteredAndSortedRepos.length} />
 
-      <main className="flex-1 max-w-7xl mx-auto w-full px-4 sm:px-8 py-6 space-y-6">
+      <main className="flex-1 max-w-7xl mx-auto w-full px-3.5 sm:px-8 py-4 sm:py-6 space-y-3.5 sm:space-y-4">
         {/* Controls: Search & Sort Bar */}
-        <section aria-label="Search and Sorting Controls" className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
+        <section aria-label="Search and Sorting Controls" className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 sm:gap-3">
           <div className="flex-1">
             <SearchBar
               value={query}
@@ -111,7 +113,7 @@ export default function App() {
         </section>
 
         {/* Dynamic Filters */}
-        <section aria-label="Filter Controls" className="bg-[#161b22] border border-[#30363d] rounded-xl p-4">
+        <section aria-label="Filter Controls" className="bg-[#161b22]/70 border border-[#30363d] rounded-xl p-3 sm:p-3.5 shadow-xs">
           <FilterBar
             filterOptions={filterOptions}
             selectedCategories={selectedCategories}
@@ -136,15 +138,31 @@ export default function App() {
           ) : repos.length === 0 ? (
             <EmptyState type="empty" />
           ) : filteredAndSortedRepos.length === 0 ? (
-            <EmptyState type="search" onReset={handleResetFilters} />
+            <EmptyState
+              type="search"
+              query={query}
+              hasActiveFilters={hasActiveFilters}
+              onClearQuery={() => setQuery('')}
+              onReset={handleResetFilters}
+            />
           ) : (
             <RepoGrid repos={filteredAndSortedRepos} />
           )}
         </section>
       </main>
 
-      <footer className="border-t border-[#30363d] py-6 px-4 text-center text-xs text-github-muted">
-        <p>GitHub Starred Repos Classifier • Personal Developer Dashboard</p>
+      <footer className="border-t border-[#30363d] py-5 px-4 text-center text-xs text-github-muted">
+        <p>
+          <a
+            href="https://github.com/denizyozgatli/starred-repos-classifier"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="hover:text-white underline decoration-github-muted underline-offset-2 transition-colors"
+          >
+            starred-repos-classifier
+          </a>{' '}
+          • Personal GitHub Stars Library
+        </p>
       </footer>
     </div>
   );

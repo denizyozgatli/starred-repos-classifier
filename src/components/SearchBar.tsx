@@ -41,31 +41,31 @@ export const SearchBar: React.FC<SearchBarProps> = ({
         Search repositories
       </label>
       <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-github-muted">
-        <Search className="w-4 h-4" />
+        <Search className="w-4 h-4" aria-hidden="true" />
       </div>
       <input
         ref={inputRef}
         id="repo-search"
-        type="text"
+        type="search"
         value={value}
         onChange={e => onChange(e.target.value)}
         placeholder={placeholder}
-        className="w-full pl-10 pr-20 py-2.5 bg-[#161b22] border border-[#30363d] rounded-lg text-sm text-[#c9d1d9] placeholder-github-muted focus:outline-none focus:ring-2 focus:ring-[#58a6ff] focus:border-transparent transition-all"
+        className="w-full pl-10 pr-11 sm:pr-14 py-2.5 bg-[#161b22] border border-[#30363d] rounded-lg text-sm text-[#c9d1d9] placeholder-[#8b949e] focus:outline-none focus:ring-2 focus:ring-[#58a6ff] focus:border-transparent transition-all"
         autoComplete="off"
         spellCheck="false"
       />
-      <div className="absolute inset-y-0 right-0 pr-3 flex items-center gap-1.5">
+      <div className="absolute inset-y-0 right-0 pr-1.5 sm:pr-2.5 flex items-center">
         {value ? (
           <button
             type="button"
             onClick={onClear}
-            className="p-1 text-github-muted hover:text-white rounded-md focus:outline-none focus:ring-2 focus:ring-[#58a6ff]"
+            className="min-w-[36px] min-h-[36px] sm:min-w-[32px] sm:min-h-[32px] p-1.5 text-github-muted hover:text-white rounded-md focus-visible:ring-2 focus-visible:ring-[#58a6ff] focus-visible:outline-none flex items-center justify-center transition-colors"
             aria-label="Clear search query"
           >
-            <X className="w-4 h-4" />
+            <X className="w-4 h-4" aria-hidden="true" />
           </button>
         ) : (
-          <kbd className="hidden sm:inline-block px-1.5 py-0.5 text-[10px] font-mono font-medium text-github-muted bg-[#21262d] border border-[#30363d] rounded">
+          <kbd className="hidden sm:inline-flex items-center px-1.5 py-0.5 text-[10px] font-mono font-medium text-github-muted bg-[#21262d] border border-[#30363d] rounded select-none pointer-events-none">
             /
           </kbd>
         )}
