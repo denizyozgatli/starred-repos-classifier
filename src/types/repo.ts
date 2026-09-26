@@ -63,3 +63,15 @@ export interface DatasetMetadata {
   generatedAt?: string;
   totalRepos?: number;
 }
+
+export const CURRENT_SCHEMA_VERSION = 1;
+
+export interface DatasetEnvelope {
+  schemaVersion: number;
+  generatedAt?: string;
+  username?: string;
+  source?: DatasetSource;
+  repos: Repository[];
+}
+
+export type ValidDatasetInput = Repository[] | DatasetEnvelope;

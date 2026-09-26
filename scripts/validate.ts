@@ -29,7 +29,8 @@ function main() {
     process.exit(1);
   }
 
-  console.log(`[validate] SUCCESS: Dataset contains ${(repos as unknown[]).length} valid repositories.`);
+  const count = Array.isArray(repos) ? repos.length : (repos as { repos?: unknown[] }).repos?.length ?? 0;
+  console.log(`[validate] SUCCESS: Dataset contains ${count} valid repositories.`);
 
   const metaPath = resolve(process.cwd(), 'data', 'metadata.json');
   if (existsSync(metaPath)) {

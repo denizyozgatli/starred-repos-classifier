@@ -67,6 +67,52 @@ describe('datasetLoader', () => {
       expect(result.success).toBe(true);
       expect(result.data).toHaveLength(1);
       expect(result.data?.[0].name).toBe('test-repo');
+      expect(result.metadata?.schemaVersion).toBe(1);
+      expect(result.error).toBeUndefined();
+    });
+
+    it('successfully loads and normalizes a versioned envelope dataset', async () => {
+      const envelope = {
+        schemaVersion: 1,
+        username: 'testowner',
+        generatedAt: '2026-09-26T12:00:00Z',
+        repos: VALID_SAMPLE_REPOS,
+      };
+      globalThis.fetch = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        statusText: 'OK',
+        text: async () => JSON.stringify(envelope),
+      } as unknown as Response);
+
+      const result = await fetchDataset('/data/repos.json');
+      expect(result.success).toBe(true);
+      expect(result.data).toHaveLength(1);
+      expect(result.data?.[0].name).toBe('test-repo');
+      expect(result.metadata?.schemaVersion).toBe(1);
+      expect(result.metadata?.username).toBe('testowner');
+      expect(result.metadata?.generatedAt).toBe('2026-09-26T12:00:00Z');
+      expect(result.error).toBeUndefined();
+    });
+
+    it('successfully fetches, validates, and normalizes a versioned envelope with empty repos', async () => {
+      const envelope = {
+        schemaVersion: 1,
+        username: 'emptyowner',
+        repos: [],
+      };
+      globalThis.fetch = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        statusText: 'OK',
+        text: async () => JSON.stringify(envelope),
+      } as unknown as Response);
+
+      const result = await fetchDataset('/data/repos.json');
+      expect(result.success).toBe(true);
+      expect(result.data).toEqual([]);
+      expect(result.metadata?.schemaVersion).toBe(1);
+      expect(result.metadata?.username).toBe('emptyowner');
       expect(result.error).toBeUndefined();
     });
 

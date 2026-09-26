@@ -1,10 +1,11 @@
 import { describe, it, expect } from 'vitest';
-import type { Repository } from '../src/types/repo.ts';
+import { CURRENT_SCHEMA_VERSION, type Repository, type DatasetEnvelope } from '../src/types/repo.ts';
 import { searchRepositories } from '../src/lib/search.ts';
 import { extractFilterOptions, filterRepositories, computeContextualFilterOptions } from '../src/lib/filters.ts';
 import { sortRepositories } from '../src/lib/sorting.ts';
 import { stateToQueryString, readStateFromUrl, type DashboardState } from '../src/lib/urlState.ts';
 import { parseAndValidateDataset, validateDataset } from '../src/lib/datasetValidation.ts';
+import { validateRepos } from '../scripts/lib/validator.ts';
 
 const SAMPLE_REPOS: Repository[] = [
   {
@@ -327,14 +328,14 @@ describe('Frontend Logic', () => {
       expect(resultWhitespace.error).toContain('file is empty');
     });
 
-    it('rejects non-array JSON inputs', () => {
+    it('rejects non-array and invalid non-envelope JSON inputs', () => {
       const resultObject = parseAndValidateDataset(JSON.stringify({ repo: 'single' }));
       expect(resultObject.valid).toBe(false);
-      expect(resultObject.error).toContain('must be a JSON array of repositories');
+      expect(resultObject.error).toBeDefined();
 
       const resultPrimitive = parseAndValidateDataset(JSON.stringify(12345));
       expect(resultPrimitive.valid).toBe(false);
-      expect(resultPrimitive.error).toContain('must be a JSON array of repositories');
+      expect(resultPrimitive.error).toBeDefined();
     });
 
     it('rejects an empty array of repositories', () => {
@@ -688,6 +689,149 @@ describe('Frontend Logic', () => {
       expect(facets.categories.map(c => c.value)).toEqual(['Web Frontend']);
       // Lists within 'ML / AI'
       expect(facets.lists.map(l => l.value)).toEqual(expect.arrayContaining(['AI Tools', 'Starred Favorites']));
+    });
+  });
+
+  describe('P3.2 - Dataset Schema & Versioning', () => {
+    it('accepts legacy Repository[] bare array and normalizes as schema version 1', () => {
+      const result = validateDataset(SAMPLE_REPOS);
+      expect(result.valid).toBe(true);
+      expect(result.data).toHaveLength(SAMPLE_REPOS.length);
+      expect(result.metadata).toBeDefined();
+      expect(result.metadata?.schemaVersion).toBe(CURRENT_SCHEMA_VERSION);
+    });
+
+    it('accepts a valid schema v1 envelope', () => {
+      const envelope: DatasetEnvelope = {
+        schemaVersion: 1,
+        repos: SAMPLE_REPOS,
+      };
+      const result = validateDataset(envelope);
+      expect(result.valid).toBe(true);
+      expect(result.data).toHaveLength(SAMPLE_REPOS.length);
+      expect(result.metadata?.schemaVersion).toBe(1);
+    });
+
+    it('preserves optional metadata fields (username, generatedAt, source) in envelope', () => {
+      const envelope: DatasetEnvelope = {
+        schemaVersion: 1,
+        username: 'alice',
+        generatedAt: '2026-09-26T12:00:00.000Z',
+        source: {
+          type: 'github-stars',
+          username: 'alice',
+        },
+        repos: SAMPLE_REPOS,
+      };
+      const result = validateDataset(envelope);
+      expect(result.valid).toBe(true);
+      expect(result.metadata?.username).toBe('alice');
+      expect(result.metadata?.generatedAt).toBe('2026-09-26T12:00:00.000Z');
+      expect(result.metadata?.source).toEqual({ type: 'github-stars', username: 'alice' });
+    });
+
+    it('validates envelope repositories using existing repository-level rules', () => {
+      const invalidEnvelope = {
+        schemaVersion: 1,
+        repos: [
+          {
+            ...SAMPLE_REPOS[0],
+            stars: -10, // Invalid negative stars
+          },
+        ],
+      };
+      const result = validateDataset(invalidEnvelope);
+      expect(result.valid).toBe(false);
+      expect(result.error).toContain('has invalid "stars"');
+    });
+
+    it('rejects an envelope missing a valid repos array', () => {
+      // Missing repos field
+      const missingRepos = { schemaVersion: 1 };
+      const resultMissing = validateDataset(missingRepos);
+      expect(resultMissing.valid).toBe(false);
+      expect(resultMissing.error).toContain('missing a valid "repos" array');
+
+      // repos is not an array
+      const nonArrayRepos = { schemaVersion: 1, repos: 'not-an-array' };
+      const resultNonArray = validateDataset(nonArrayRepos);
+      expect(resultNonArray.valid).toBe(false);
+      expect(resultNonArray.error).toContain('missing a valid "repos" array');
+    });
+
+    it('accepts an envelope with an empty repos array as structurally valid', () => {
+      const emptyEnvelope = { schemaVersion: 1, repos: [] };
+      const result = validateDataset(emptyEnvelope);
+      expect(result.valid).toBe(true);
+      expect(result.data).toEqual([]);
+      expect(result.metadata?.schemaVersion).toBe(1);
+    });
+
+    it('rejects an envelope with invalid or non-integer schemaVersion types', () => {
+      // String version
+      const stringVersion = { schemaVersion: '1', repos: SAMPLE_REPOS };
+      const resultString = validateDataset(stringVersion);
+      expect(resultString.valid).toBe(false);
+      expect(resultString.error).toContain('Invalid "schemaVersion": must be an integer');
+
+      // Float version
+      const floatVersion = { schemaVersion: 1.5, repos: SAMPLE_REPOS };
+      const resultFloat = validateDataset(floatVersion);
+      expect(resultFloat.valid).toBe(false);
+      expect(resultFloat.error).toContain('Invalid "schemaVersion": must be an integer');
+
+      // Missing version
+      const missingVersion = { repos: SAMPLE_REPOS };
+      const resultMissing = validateDataset(missingVersion);
+      expect(resultMissing.valid).toBe(false);
+      expect(resultMissing.error).toContain('Dataset envelope is missing "schemaVersion"');
+    });
+
+    it('accepts an integer schemaVersion <= CURRENT_SCHEMA_VERSION without arbitrary positive-only restriction', () => {
+      const zeroVersion = { schemaVersion: 0, repos: SAMPLE_REPOS };
+      const resultZero = validateDataset(zeroVersion);
+      expect(resultZero.valid).toBe(true);
+      expect(resultZero.metadata?.schemaVersion).toBe(0);
+    });
+
+    it('rejects unsupported future schema versions with clear upgrade message', () => {
+      const futureEnvelope = { schemaVersion: 2, repos: SAMPLE_REPOS };
+      const result = validateDataset(futureEnvelope);
+      expect(result.valid).toBe(false);
+      expect(result.error).toContain('Unsupported dataset schema version (2)');
+      expect(result.error).toContain('This version supports schema version 1');
+    });
+
+    it('verifies pipeline validator (validateRepos) accepts bare array, valid envelope, and empty repos envelope', () => {
+      // 1. Bare array
+      const arrayResult = validateRepos(SAMPLE_REPOS);
+      expect(arrayResult.valid).toBe(true);
+      expect(arrayResult.errors).toHaveLength(0);
+
+      // 2. Envelope
+      const envelopeResult = validateRepos({
+        schemaVersion: 1,
+        username: 'pipeline-user',
+        repos: SAMPLE_REPOS,
+      });
+      expect(envelopeResult.valid).toBe(true);
+      expect(envelopeResult.errors).toHaveLength(0);
+
+      // 3. Envelope with empty repos array
+      const emptyEnvelopeResult = validateRepos({
+        schemaVersion: 1,
+        repos: [],
+      });
+      expect(emptyEnvelopeResult.valid).toBe(true);
+      expect(emptyEnvelopeResult.errors).toHaveLength(0);
+
+      // 4. Unsupported version
+      const futureResult = validateRepos({
+        schemaVersion: 99,
+        repos: SAMPLE_REPOS,
+      });
+      expect(futureResult.valid).toBe(false);
+      expect(futureResult.errors[0].message).toContain('Unsupported dataset schema version (99)');
     });
   });
 });

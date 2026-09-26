@@ -1,4 +1,4 @@
-import { ALLOWED_CATEGORIES, type Repository } from '../../src/types/repo.ts';
+import { ALLOWED_CATEGORIES, CURRENT_SCHEMA_VERSION, type Repository } from '../../src/types/repo.ts';
 
 export interface ValidationError {
   index?: number;
@@ -14,21 +14,67 @@ export interface ValidationResult {
 
 /**
  * Validates a list of repositories against the schema and safety requirements.
+ * Accepts both legacy bare Repository[] arrays and versioned DatasetEnvelope objects.
  */
 export function validateRepos(data: unknown): ValidationResult {
   const errors: ValidationError[] = [];
 
-  if (!Array.isArray(data)) {
+  if (!data || typeof data !== 'object') {
     return {
       valid: false,
-      errors: [{ message: 'Dataset must be an array of repositories.' }],
+      errors: [{ message: 'Dataset must be an array or envelope object.' }],
     };
+  }
+
+  let reposArray: unknown[];
+
+  if (Array.isArray(data)) {
+    reposArray = data;
+  } else {
+    const envelope = data as Record<string, unknown>;
+
+    if (envelope.schemaVersion === undefined || envelope.schemaVersion === null) {
+      return {
+        valid: false,
+        errors: [{ message: 'Dataset envelope is missing "schemaVersion".' }],
+      };
+    }
+
+    if (
+      typeof envelope.schemaVersion !== 'number' ||
+      !Number.isInteger(envelope.schemaVersion)
+    ) {
+      return {
+        valid: false,
+        errors: [{ message: 'Invalid "schemaVersion": must be an integer.' }],
+      };
+    }
+
+    if (envelope.schemaVersion > CURRENT_SCHEMA_VERSION) {
+      return {
+        valid: false,
+        errors: [
+          {
+            message: `Unsupported dataset schema version (${envelope.schemaVersion}). This version supports schema version ${CURRENT_SCHEMA_VERSION}.`,
+          },
+        ],
+      };
+    }
+
+    if (!('repos' in envelope) || !Array.isArray(envelope.repos)) {
+      return {
+        valid: false,
+        errors: [{ message: 'Dataset envelope is missing a valid "repos" array.' }],
+      };
+    }
+
+    reposArray = envelope.repos;
   }
 
   const seenIds = new Set<number>();
   const seenFullNames = new Set<string>();
 
-  data.forEach((item, index) => {
+  (reposArray as unknown[]).forEach((item, index) => {
     if (!item || typeof item !== 'object') {
       errors.push({ index, message: 'Repository entry is not an object.' });
       return;

@@ -1,12 +1,12 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { Upload, X, AlertCircle, FileJson, RotateCcw } from 'lucide-react';
 import type { Repository } from '../types/repo.ts';
-import { parseAndValidateDataset } from '../lib/datasetValidation.ts';
+import { parseAndValidateDataset, type DatasetValidationResult } from '../lib/datasetValidation.ts';
 
 interface ImportModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onImport: (repos: Repository[], fileName: string) => void;
+  onImport: (repos: Repository[], fileName: string, metadata?: DatasetValidationResult['metadata']) => void;
   isImported: boolean;
   importedFileName?: string;
   onResetToDefault: () => void;
@@ -84,7 +84,7 @@ export const ImportModal: React.FC<ImportModalProps> = ({
           }
 
           // Successful import
-          onImport(validation.data, file.name);
+          onImport(validation.data, file.name, validation.metadata);
           onClose();
         } catch (err) {
           const msg = err instanceof Error ? err.message : 'Unknown error during import.';

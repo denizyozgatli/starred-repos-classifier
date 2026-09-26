@@ -1,9 +1,21 @@
-import { ALLOWED_CATEGORIES, type Repository, type RepositoryCategory } from '../types/repo.ts';
+import {
+  ALLOWED_CATEGORIES,
+  CURRENT_SCHEMA_VERSION,
+  type Repository,
+  type RepositoryCategory,
+  type DatasetSource,
+} from '../types/repo.ts';
 
 export interface DatasetValidationResult {
   valid: boolean;
   error?: string;
   data?: Repository[];
+  metadata?: {
+    schemaVersion: number;
+    username?: string;
+    generatedAt?: string;
+    source?: DatasetSource;
+  };
 }
 
 /**
@@ -28,23 +40,74 @@ export function parseAndValidateDataset(jsonString: string): DatasetValidationRe
 
 /**
  * Validates a parsed JSON structure against the Repository schema.
+ * Accepts both legacy bare Repository[] arrays and versioned DatasetEnvelope objects.
  */
 export function validateDataset(parsed: unknown): DatasetValidationResult {
-  // 1. Must be an array
-  if (!Array.isArray(parsed)) {
-    return { valid: false, error: 'Dataset must be a JSON array of repositories.' };
+  if (!parsed || typeof parsed !== 'object') {
+    return { valid: false, error: 'Dataset must be a JSON array or envelope object.' };
   }
 
-  // 2. Cannot be empty
-  if (parsed.length === 0) {
-    return { valid: false, error: 'Dataset is empty (contains 0 repositories).' };
+  let reposArray: unknown[];
+  let metadata: DatasetValidationResult['metadata'] = {
+    schemaVersion: CURRENT_SCHEMA_VERSION,
+  };
+
+  if (Array.isArray(parsed)) {
+    // Mode A: Legacy / implicit v1 bare array
+    if (parsed.length === 0) {
+      return { valid: false, error: 'Dataset is empty (contains 0 repositories).' };
+    }
+    reposArray = parsed;
+  } else {
+    // Mode B: Explicit v1+ envelope object
+    const envelope = parsed as Record<string, unknown>;
+
+    if (envelope.schemaVersion === undefined || envelope.schemaVersion === null) {
+      return { valid: false, error: 'Dataset envelope is missing "schemaVersion".' };
+    }
+
+    if (
+      typeof envelope.schemaVersion !== 'number' ||
+      !Number.isInteger(envelope.schemaVersion)
+    ) {
+      return { valid: false, error: 'Invalid "schemaVersion": must be an integer.' };
+    }
+
+    if (envelope.schemaVersion > CURRENT_SCHEMA_VERSION) {
+      return {
+        valid: false,
+        error: `Unsupported dataset schema version (${envelope.schemaVersion}). This version supports schema version ${CURRENT_SCHEMA_VERSION}.`,
+      };
+    }
+
+    if (!('repos' in envelope) || !Array.isArray(envelope.repos)) {
+      return { valid: false, error: 'Dataset envelope is missing a valid "repos" array.' };
+    }
+
+    reposArray = envelope.repos;
+
+    metadata = {
+      schemaVersion: envelope.schemaVersion,
+      ...(typeof envelope.username === 'string' && envelope.username.trim()
+        ? { username: envelope.username.trim() }
+        : {}),
+      ...(typeof envelope.generatedAt === 'string' && envelope.generatedAt.trim()
+        ? { generatedAt: envelope.generatedAt.trim() }
+        : {}),
+      ...(envelope.source &&
+      typeof envelope.source === 'object' &&
+      !Array.isArray(envelope.source) &&
+      (envelope.source as { type?: string }).type === 'github-stars'
+        ? { source: envelope.source as DatasetSource }
+        : {}),
+    };
   }
 
   const seenIds = new Set<number>();
   const seenFullNames = new Set<string>();
 
-  for (let i = 0; i < parsed.length; i++) {
-    const item = parsed[i];
+  for (let i = 0; i < reposArray.length; i++) {
+    const item = (reposArray as unknown[])[i];
     const indexLabel = `Item #${i + 1}`;
 
     // 3. Must be an object
@@ -145,6 +208,7 @@ export function validateDataset(parsed: unknown): DatasetValidationResult {
 
   return {
     valid: true,
-    data: parsed as Repository[],
+    data: reposArray as Repository[],
+    metadata,
   };
 }

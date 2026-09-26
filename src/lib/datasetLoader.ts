@@ -1,9 +1,10 @@
 import type { Repository } from '../types/repo.ts';
-import { parseAndValidateDataset } from './datasetValidation.ts';
+import { parseAndValidateDataset, type DatasetValidationResult } from './datasetValidation.ts';
 
 export interface DatasetLoaderResult {
   success: boolean;
   data?: Repository[];
+  metadata?: DatasetValidationResult['metadata'];
   error?: string;
 }
 
@@ -47,6 +48,7 @@ export async function fetchDataset(
     return {
       success: true,
       data: validation.data,
+      metadata: validation.metadata,
     };
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown network error';
