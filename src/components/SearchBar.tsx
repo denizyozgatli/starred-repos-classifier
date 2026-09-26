@@ -50,7 +50,7 @@ export const SearchBar: React.FC<SearchBarProps> = ({
         value={value}
         onChange={e => onChange(e.target.value)}
         placeholder={placeholder}
-        className="w-full pl-10 pr-11 sm:pr-14 py-2.5 bg-[#161b22] border border-[#30363d] rounded-lg text-sm text-[#c9d1d9] placeholder-[#8b949e] focus:outline-none focus:ring-2 focus:ring-[#58a6ff] focus:border-transparent transition-all"
+        className="w-full pl-10 pr-11 sm:pr-14 py-2.5 bg-[#161b22] border border-[#30363d] rounded-lg text-sm text-[#c9d1d9] placeholder-[#8b949e] focus:outline-none focus:ring-2 focus:ring-[#58a6ff] focus:border-transparent transition-all appearance-none [&::-webkit-search-cancel-button]:appearance-none"
         autoComplete="off"
         spellCheck="false"
       />
