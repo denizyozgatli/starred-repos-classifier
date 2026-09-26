@@ -131,6 +131,16 @@ export default function App() {
 
   const hasActiveFilters = selectedCategories.length > 0 || selectedLanguages.length > 0 || Boolean(selectedList);
 
+  const exportFilterContext = useMemo(() => ({
+    isFiltered: hasActiveFilters || query.trim().length > 0,
+    query,
+    categories: selectedCategories,
+    languages: selectedLanguages,
+    list: selectedList,
+    sortBy,
+    totalCount: repos.length,
+  }), [hasActiveFilters, query, selectedCategories, selectedLanguages, selectedList, sortBy, repos.length]);
+
   return (
     <div className="min-h-screen bg-[#0d1117] text-[#c9d1d9] flex flex-col font-sans selection:bg-[#1f6feb] selection:text-white">
       <Header
@@ -141,6 +151,9 @@ export default function App() {
         importedFileName={importedFileName ?? undefined}
         onOpenImport={() => setIsImportModalOpen(true)}
         onResetToDefault={isImported ? handleResetToDefault : undefined}
+        repos={repos}
+        filteredRepos={filteredAndSortedRepos}
+        filterContext={exportFilterContext}
       />
 
       <main className="flex-1 max-w-7xl mx-auto w-full px-3.5 sm:px-8 py-4 sm:py-6 space-y-3.5 sm:space-y-4">

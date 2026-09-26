@@ -1,5 +1,8 @@
 import React from 'react';
 import { Star, Upload } from 'lucide-react';
+import type { Repository } from '../types/repo.ts';
+import type { ExportFilterContext } from '../lib/export.ts';
+import { ExportMenu } from './ExportMenu.tsx';
 
 interface HeaderProps {
   totalCount: number;
@@ -9,6 +12,9 @@ interface HeaderProps {
   importedFileName?: string;
   onOpenImport: () => void;
   onResetToDefault?: () => void;
+  repos: Repository[];
+  filteredRepos: Repository[];
+  filterContext?: ExportFilterContext;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -19,6 +25,9 @@ export const Header: React.FC<HeaderProps> = ({
   importedFileName,
   onOpenImport,
   onResetToDefault,
+  repos,
+  filteredRepos,
+  filterContext,
 }) => {
   const isFiltered = totalCount !== filteredCount;
 
@@ -58,23 +67,30 @@ export const Header: React.FC<HeaderProps> = ({
           </div>
         </div>
 
-        {/* Counter, Import Control & GitHub Profile Access */}
+        {/* Counter, Dataset Action Group (Import / Export) & GitHub Profile Access */}
         <div className="flex items-center gap-2 sm:gap-2.5">
-          <button
-            type="button"
-            onClick={onOpenImport}
-            className={`inline-flex items-center gap-1.5 px-2.5 sm:px-3 py-1 text-xs font-medium rounded-lg border transition-colors focus-visible:ring-2 focus-visible:ring-[#58a6ff] focus-visible:outline-none ${
-              isImported
-                ? 'bg-[#a371f7]/15 border-[#a371f7]/40 text-[#d2a8ff] hover:bg-[#a371f7]/25'
-                : 'bg-[#21262d] border-[#30363d] text-white/90 hover:bg-[#30363d] hover:text-white'
-            }`}
-            title="Import a local repos.json dataset"
-            aria-label="Import a local repos.json dataset"
-          >
-            <Upload className="w-3.5 h-3.5" aria-hidden="true" />
-            <span className="hidden sm:inline">Import JSON</span>
-            <span className="sm:hidden">Import</span>
-          </button>
+          <div className="flex items-center gap-1.5">
+            <button
+              type="button"
+              onClick={onOpenImport}
+              className={`inline-flex items-center gap-1.5 px-2.5 sm:px-3 py-1 text-xs font-medium rounded-lg border transition-colors focus-visible:ring-2 focus-visible:ring-[#58a6ff] focus-visible:outline-none cursor-pointer ${
+                isImported
+                  ? 'bg-[#a371f7]/15 border-[#a371f7]/40 text-[#d2a8ff] hover:bg-[#a371f7]/25'
+                  : 'bg-[#21262d] border-[#30363d] text-white/90 hover:bg-[#30363d] hover:text-white'
+              }`}
+              title="Import a local repos.json dataset"
+              aria-label="Import a local repos.json dataset"
+            >
+              <Upload className="w-3.5 h-3.5" aria-hidden="true" />
+              <span className="hidden sm:inline">Import JSON</span>
+              <span className="sm:hidden">Import</span>
+            </button>
+            <ExportMenu
+              repos={repos}
+              filteredRepos={filteredRepos}
+              filterContext={filterContext}
+            />
+          </div>
           <div
             className="text-xs font-medium text-github-muted bg-[#21262d] px-2.5 sm:px-3 py-1 rounded-full border border-[#30363d] whitespace-nowrap"
             aria-live="polite"

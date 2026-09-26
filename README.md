@@ -18,6 +18,7 @@ The application runs entirely as a static frontend with no runtime backend serve
 - **Language Filtering**: Dynamically populated from active repositories with counts and an expandable `+N more` selector.
 - **Sorting Options**: Sort by relevance, most stars, recently updated, or alphabetically (A–Z) using a custom accessible listbox styled to match GitHub's dark aesthetic.
 - **Deep-Link URL State**: URL search parameters (`q`, `category`, `language`, `list`, `sort`) synchronize bidirectionally, making every search and filter view shareable and bookmarkable.
+- **Client-Side Data Export**: Export active filtered views or complete datasets directly to JSON (100% re-importable), CSV (RFC 4180 compliant with UTF-8 BOM for Excel), or Markdown with zero server interaction.
 - **Responsive Layout**: Clean desktop grid with mobile-optimized touch controls and zero horizontal overflow across all screen sizes.
 - **Full-Card Navigation**: Entire card surfaces are clickable directly to GitHub repositories, complete with GitHub language color indicators and topic badges.
 
@@ -203,6 +204,25 @@ npm run cli -- --user octocat
 
 ---
 
+## Data Export
+
+The web dashboard includes built-in client-side data export capabilities located directly in the control bar next to sorting. All exports operate entirely within your browser with zero network requests or server storage.
+
+### Supported Formats
+
+| Format | File Extension | Characteristics & Compatibility |
+|---|---|---|
+| **JSON** | `.json` | Full repository schema including classification method, confidence, and timestamps. **100% round-trip compatible** with the web UI's **Import JSON** feature. |
+| **CSV** | `.csv` | RFC 4180-compliant 13-column spreadsheet format. Prepends a UTF-8 BOM (`\uFEFF`) ensuring seamless character rendering in Microsoft Excel, Apple Numbers, and Google Sheets without Turkish or Unicode corruption. Topics and star lists are formatted as semicolon-separated lists. |
+| **Markdown** | `.md` | Human-readable GitHub-flavored Markdown document with active filter summaries, metadata blocks, formatted star counts, and direct GitHub links. Ideal for documentation, personal notes, or sharing curated lists. |
+
+### Supported Export Scopes
+
+- **Export Filtered (`N` repos)**: Exports the exact active filtered, searched, and sorted subset visible in the dashboard grid. Downloads as `starred-repos-filtered.*`.
+- **Export All (`Total` repos)**: Exports the entire loaded dataset (bundled or imported) regardless of current search queries or active filters. Downloads as `starred-repos.*`.
+
+---
+
 ## Local Development
 
 ### Prerequisites
@@ -265,7 +285,7 @@ Open `http://localhost:3000` (or `http://localhost:5173`) in your browser.
 | `dev` | `vite` | Starts local development server |
 | `build` | `tsc && vite build` | Typechecks and builds static assets in `dist/` |
 | `preview` | `vite preview` | Serves the local `dist/` production build |
-| `test` | `vitest run` | Runs all 84 unit and integration tests |
+| `test` | `vitest run` | Runs all 132 unit and integration tests |
 | `test:watch` | `vitest` | Runs tests in interactive watch mode |
 | `pipeline:run` | `tsx scripts/run-pipeline.ts` | Runs the full pipeline: fetch, classify, and validate |
 | `pipeline:fetch` | `tsx scripts/fetch.ts` | Fetches starred repositories from GitHub API |
@@ -284,11 +304,13 @@ Open `http://localhost:3000` (or `http://localhost:5173`) in your browser.
 ```bash
 npm test
 ```
-Executes 79 tests across 3 suites:
+Executes 132 tests across 5 test suites:
 - Pipeline fetch, normalization, atomic rollback, and pagination.
 - Rate limiter intervals, retry backoff, and cache exclusion rules.
 - Deterministic rule classifier tokenization, intent detection, and scoring.
 - Client-side Fuse.js fuzzy search, URL state management, and sorting.
+- Standalone CLI execution, arguments, and cache isolation.
+- Client-side data export formatting (JSON, RFC 4180 CSV with UTF-8 BOM, Markdown) and scope isolation.
 
 ### Development Benchmark
 
