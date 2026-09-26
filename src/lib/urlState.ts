@@ -6,6 +6,7 @@ export interface DashboardState {
   categories: RepositoryCategory[];
   languages: string[];
   sortBy: SortOption;
+  list: string | null;
 }
 
 /**
@@ -13,7 +14,7 @@ export interface DashboardState {
  */
 export function readStateFromUrl(): DashboardState {
   if (typeof window === 'undefined') {
-    return { query: '', categories: [], languages: [], sortBy: 'relevance' };
+    return { query: '', categories: [], languages: [], sortBy: 'relevance', list: null };
   }
 
   const params = new URLSearchParams(window.location.search);
@@ -33,7 +34,9 @@ export function readStateFromUrl(): DashboardState {
       ? sortParam
       : 'relevance';
 
-  return { query, categories, languages, sortBy };
+  const list = params.get('list')?.trim() || null;
+
+  return { query, categories, languages, sortBy, list };
 }
 
 /**
@@ -56,6 +59,10 @@ export function stateToQueryString(state: DashboardState): string {
 
   if (state.sortBy !== 'relevance') {
     params.set('sort', state.sortBy);
+  }
+
+  if (state.list && state.list.trim()) {
+    params.set('list', state.list.trim());
   }
 
   const str = params.toString();

@@ -30,7 +30,9 @@ export interface NormalizedRepo {
   updatedAt: string;
   archived: boolean;
   fork: boolean;
+  lists?: string[];
 }
+
 
 /**
  * Normalizes a raw GitHub repository API object into the internal pipeline format.

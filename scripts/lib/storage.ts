@@ -3,6 +3,9 @@ import { resolve, dirname } from 'node:path';
 
 export const REPOS_PATH = resolve(process.cwd(), 'data', 'repos.json');
 export const REPOS_BACKUP_PATH = resolve(process.cwd(), 'data', 'repos.backup.json');
+export const METADATA_PATH = resolve(process.cwd(), 'data', 'metadata.json');
+export const METADATA_BACKUP_PATH = resolve(process.cwd(), 'data', 'metadata.backup.json');
+
 
 /**
  * Creates a backup copy of the target file if it exists.

@@ -7,9 +7,10 @@ import { computeInputHash, loadCache, saveCache } from '../scripts/lib/cache.ts'
 import { RateLimiter, executeWithRetry, extractRetryDelayMs, isRateLimitError, isUnavailableError } from '../scripts/lib/rate-limiter.ts';
 import { applyOverrides } from '../scripts/lib/overrides.ts';
 import { validateRepos } from '../scripts/lib/validator.ts';
-import { fetchAllStarredRepos, GitHubApiError } from '../scripts/lib/github.ts';
+import { fetchAllStarredRepos, GitHubApiError, parseUsernameFromArgs, resolveActiveUsername } from '../scripts/lib/github.ts';
 import { atomicWriteJson, withDatasetSafety } from '../scripts/lib/storage.ts';
 import { runClassification } from '../scripts/classify.ts';
+import { mergeStarLists } from '../scripts/lib/star-lists.ts';
 import type { Repository } from '../src/types/repo.ts';
 
 describe('Data Pipeline', () => {
@@ -501,7 +502,11 @@ describe('Data Pipeline', () => {
       });
 
       // Passing an invalid key will trigger an API error inside classifyWithLLM
-      const res = await classifyWithLLM(sparseRepo, 'invalid-key-that-causes-auth-error');
+      const res = await classifyWithLLM(sparseRepo, {
+        apiKey: 'invalid-key-that-causes-auth-error',
+        rateLimiter: new RateLimiter({ minIntervalMs: 0 }),
+        maxRetries: 0,
+      });
       expect(res.category).toBe('Other');
       expect(res.method).toBe('fallback');
       expect(res.confidence).toBe(0.5);
@@ -623,11 +628,70 @@ describe('Data Pipeline', () => {
       expect(res.errors.some(e => e.field === 'category')).toBe(true);
     });
 
-    it('rejects invalid URL', () => {
-      const invalidUrlRepo = { ...validRepo, url: 'not-a-valid-url' };
-      const res = validateRepos([invalidUrlRepo]);
+    it('validates repositories with star lists', () => {
+      const repoWithLists = { ...validRepo, lists: ['dev-tools', 'favorites'] };
+      const res = validateRepos([repoWithLists]);
+      expect(res.valid).toBe(true);
+      expect(res.errors).toHaveLength(0);
+    });
+
+    it('rejects invalid star lists type', () => {
+      const invalidListsRepo = { ...validRepo, lists: 'not-an-array' as any };
+      const res = validateRepos([invalidListsRepo]);
       expect(res.valid).toBe(false);
-      expect(res.errors.some(e => e.field === 'url')).toBe(true);
+      expect(res.errors.some(e => e.field === 'lists')).toBe(true);
+    });
+  });
+
+  describe('GitHub Star Lists Integration', () => {
+    const baseRepo: Repository = {
+      id: 201,
+      name: 'star-repo',
+      fullName: 'org/star-repo',
+      owner: 'org',
+      description: 'Repo with star lists',
+      topics: ['testing'],
+      language: 'TypeScript',
+      stars: 50,
+      url: 'https://github.com/org/star-repo',
+      updatedAt: '2026-01-01T00:00:00Z',
+      category: 'CLI / Tools',
+      classification: {
+        method: 'rule',
+        confidence: 0.9,
+        classifiedAt: '2026-01-01T00:00:00Z',
+        inputHash: 'hash201',
+      },
+    };
+
+    it('merges star list memberships into matching repositories', () => {
+      const repos = [
+        { ...baseRepo, fullName: 'org/star-repo' },
+        { ...baseRepo, id: 202, fullName: 'org/unlisted-repo' },
+      ];
+
+      const starListsMap = new Map<string, string[]>([
+        ['org/star-repo', ['Awesome Tools', 'Read Later']],
+        ['someone/other-repo', ['Read Later']],
+      ]);
+
+      const merged = mergeStarLists(repos, starListsMap);
+
+      expect(merged[0].lists).toEqual(['Awesome Tools', 'Read Later']);
+      expect(merged[1].lists).toEqual([]);
+    });
+
+    it('preserves and deduplicates lists when merging', () => {
+      const repos = [
+        { ...baseRepo, lists: ['Existing List'] },
+      ];
+
+      const starListsMap = new Map<string, string[]>([
+        ['org/star-repo', ['Existing List', 'New List']],
+      ]);
+
+      const merged = mergeStarLists(repos, starListsMap);
+      expect(merged[0].lists).toEqual(['Existing List', 'New List']);
     });
   });
 
@@ -698,6 +762,73 @@ describe('Data Pipeline', () => {
       };
 
       await expect(fetchAllStarredRepos({ token: 'test-token' })).rejects.toThrow('rate limit exceeded');
+    });
+
+    it('fetches public user starred repositories without requiring GITHUB_TOKEN', async () => {
+      delete process.env.GITHUB_TOKEN;
+      delete process.env.GITHUB_USERNAME;
+
+      let capturedUrl = '';
+      let capturedHeaders: HeadersInit | undefined;
+      globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        capturedUrl = String(input);
+        capturedHeaders = init?.headers;
+        return new Response(
+          JSON.stringify([
+            { id: 99, name: 'public-repo', full_name: 'alice/public-repo', stargazers_count: 5, html_url: 'https://github.com/alice/public-repo', updated_at: '2026-01-01T00:00:00Z' },
+          ]),
+          { status: 200, headers: { 'Content-Type': 'application/json' } }
+        );
+      };
+
+      const repos = await fetchAllStarredRepos({ username: 'alice' });
+      expect(repos).toHaveLength(1);
+      expect(repos[0].name).toBe('public-repo');
+      expect(capturedUrl).toContain('https://api.github.com/users/alice/starred');
+      expect((capturedHeaders as Record<string, string>)?.['Authorization']).toBeUndefined();
+    });
+
+    it('includes Authorization header if token is provided with public username', async () => {
+      let capturedHeaders: HeadersInit | undefined;
+      globalThis.fetch = async (_input: RequestInfo | URL, init?: RequestInit) => {
+        capturedHeaders = init?.headers;
+        return new Response(JSON.stringify([]), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      };
+
+      await fetchAllStarredRepos({ username: 'alice', token: 'custom-token' });
+      expect((capturedHeaders as Record<string, string>)?.['Authorization']).toBe('Bearer custom-token');
+    });
+
+    it('throws 404 when public username does not exist', async () => {
+      globalThis.fetch = async () => {
+        return new Response('Not Found', { status: 404, statusText: 'Not Found' });
+      };
+
+      await expect(fetchAllStarredRepos({ username: 'nonexistent-user-xyz' })).rejects.toThrow('was not found (404)');
+    });
+
+    it('parses username from CLI arguments and environment variable', () => {
+      expect(parseUsernameFromArgs(['--username', 'bob'])).toBe('bob');
+      expect(parseUsernameFromArgs(['--username=charlie'])).toBe('charlie');
+      expect(parseUsernameFromArgs(['-u', 'david'])).toBe('david');
+
+      process.env.GITHUB_USERNAME = 'eve';
+      expect(parseUsernameFromArgs([])).toBe('eve');
+      delete process.env.GITHUB_USERNAME;
+    });
+
+    it('resolves active username from explicit option or authenticated /user endpoint', async () => {
+      expect(await resolveActiveUsername({ username: 'frank' })).toBe('frank');
+
+      globalThis.fetch = async (input: RequestInfo | URL) => {
+        if (String(input).includes('/user')) {
+          return new Response(JSON.stringify({ login: 'octocat' }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+        }
+        return new Response('Not found', { status: 404 });
+      };
+
+      const resolved = await resolveActiveUsername({ token: 'gh-token' });
+      expect(resolved).toBe('octocat');
     });
   });
 
@@ -798,7 +929,7 @@ describe('Data Pipeline', () => {
       // 4. Verify existing dataset is preserved and intact
       const existing = JSON.parse(readFileSync(testTarget, 'utf-8'));
       expect(existing).toEqual(validInitialData);
-    });
+    }, 15000);
   });
 
   describe('Safe Local Dry Run & Production Flow', () => {

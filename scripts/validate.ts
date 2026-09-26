@@ -30,6 +30,20 @@ function main() {
   }
 
   console.log(`[validate] SUCCESS: Dataset contains ${(repos as unknown[]).length} valid repositories.`);
+
+  const metaPath = resolve(process.cwd(), 'data', 'metadata.json');
+  if (existsSync(metaPath)) {
+    try {
+      const metaRaw = readFileSync(metaPath, 'utf-8');
+      const meta = JSON.parse(metaRaw);
+      if (meta?.source?.type === 'github-stars') {
+        const userStr = meta.source.username ? ` (@${meta.source.username})` : '';
+        console.log(`[validate] Metadata verified: source=github-stars${userStr}`);
+      }
+    } catch (e) {
+      console.warn('[validate] Warning: Failed to parse metadata.json:', e);
+    }
+  }
 }
 
 main();

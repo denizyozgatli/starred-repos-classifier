@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo, useCallback } from 'react';
 import staticRepos from '../data/repos.json';
-import type { Repository, RepositoryCategory } from './types/repo.ts';
+import datasetMetadata from '../data/metadata.json';
+import type { Repository, RepositoryCategory, DatasetMetadata } from './types/repo.ts';
 import { extractFilterOptions, filterRepositories } from './lib/filters.ts';
 import { searchRepositories } from './lib/search.ts';
 import { sortRepositories, type SortOption } from './lib/sorting.ts';
@@ -12,8 +13,15 @@ import { SortSelector } from './components/SortSelector.tsx';
 import { RepoGrid } from './components/RepoGrid.tsx';
 import { EmptyState } from './components/EmptyState.tsx';
 
+const metadata = datasetMetadata as DatasetMetadata;
+const metaEnv = (import.meta as unknown as { env?: Record<string, string> }).env;
+const datasetOwner = metaEnv?.VITE_GITHUB_USERNAME?.trim() || metadata?.source?.username;
+
+
+
 export default function App() {
   const [repos] = useState<Repository[]>(staticRepos as Repository[]);
+
   const [loading] = useState<boolean>(false);
   const [error] = useState<string | null>(null);
 
@@ -21,6 +29,7 @@ export default function App() {
   const [query, setQuery] = useState<string>('');
   const [selectedCategories, setSelectedCategories] = useState<RepositoryCategory[]>([]);
   const [selectedLanguages, setSelectedLanguages] = useState<string[]>([]);
+  const [selectedList, setSelectedList] = useState<string | null>(null);
   const [sortBy, setSortBy] = useState<SortOption>('relevance');
 
   // Load initial URL state on mount
@@ -29,6 +38,7 @@ export default function App() {
     setQuery(initialState.query);
     setSelectedCategories(initialState.categories);
     setSelectedLanguages(initialState.languages);
+    setSelectedList(initialState.list);
     setSortBy(initialState.sortBy);
 
     // Listen to popstate for browser Back/Forward
@@ -37,6 +47,7 @@ export default function App() {
       setQuery(state.query);
       setSelectedCategories(state.categories);
       setSelectedLanguages(state.languages);
+      setSelectedList(state.list);
       setSortBy(state.sortBy);
     };
 
@@ -50,9 +61,10 @@ export default function App() {
       query,
       categories: selectedCategories,
       languages: selectedLanguages,
+      list: selectedList,
       sortBy,
     });
-  }, [query, selectedCategories, selectedLanguages, sortBy]);
+  }, [query, selectedCategories, selectedLanguages, selectedList, sortBy]);
 
   // Extract dynamic filter options from dataset (no hardcoding)
   const filterOptions = useMemo(() => {
@@ -64,12 +76,12 @@ export default function App() {
     // 1. Search
     const searched = searchRepositories(repos, query);
 
-    // 2. Filter by category & language
-    const filtered = filterRepositories(searched, selectedCategories, selectedLanguages);
+    // 2. Filter by category, language & star list
+    const filtered = filterRepositories(searched, selectedCategories, selectedLanguages, selectedList);
 
     // 3. Sort
     return sortRepositories(filtered, sortBy);
-  }, [repos, query, selectedCategories, selectedLanguages, sortBy]);
+  }, [repos, query, selectedCategories, selectedLanguages, selectedList, sortBy]);
 
   // Filter toggle handlers
   const handleToggleCategory = useCallback((category: RepositoryCategory) => {
@@ -88,14 +100,19 @@ export default function App() {
     setQuery('');
     setSelectedCategories([]);
     setSelectedLanguages([]);
+    setSelectedList(null);
     setSortBy('relevance');
   }, []);
 
-  const hasActiveFilters = selectedCategories.length > 0 || selectedLanguages.length > 0;
+  const hasActiveFilters = selectedCategories.length > 0 || selectedLanguages.length > 0 || Boolean(selectedList);
 
   return (
     <div className="min-h-screen bg-[#0d1117] text-[#c9d1d9] flex flex-col font-sans selection:bg-[#1f6feb] selection:text-white">
-      <Header totalCount={repos.length} filteredCount={filteredAndSortedRepos.length} />
+      <Header
+        totalCount={repos.length}
+        filteredCount={filteredAndSortedRepos.length}
+        datasetOwner={datasetOwner}
+      />
 
       <main className="flex-1 max-w-7xl mx-auto w-full px-3.5 sm:px-8 py-4 sm:py-6 space-y-3.5 sm:space-y-4">
         {/* Controls: Search & Sort Bar */}
@@ -118,8 +135,10 @@ export default function App() {
             filterOptions={filterOptions}
             selectedCategories={selectedCategories}
             selectedLanguages={selectedLanguages}
+            selectedList={selectedList}
             onToggleCategory={handleToggleCategory}
             onToggleLanguage={handleToggleLanguage}
+            onSelectList={setSelectedList}
             onClearAll={handleResetFilters}
           />
         </section>
@@ -161,7 +180,15 @@ export default function App() {
           >
             starred-repos-classifier
           </a>{' '}
-          • Personal GitHub Stars Library
+          • Created by{' '}
+          <a
+            href="https://github.com/denizyozgatli"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="hover:text-white underline decoration-github-muted underline-offset-2 transition-colors"
+          >
+            Deniz Yozgatlı
+          </a>
         </p>
       </footer>
     </div>

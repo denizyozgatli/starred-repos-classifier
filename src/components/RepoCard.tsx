@@ -1,5 +1,5 @@
 import React from 'react';
-import { Star, GitFork, Archive, ExternalLink } from 'lucide-react';
+import { Star, GitFork, Archive, ExternalLink, Bookmark } from 'lucide-react';
 import type { Repository, RepositoryCategory } from '../types/repo.ts';
 import { getLanguageColor } from '../lib/languageColors.ts';
 
@@ -136,7 +136,23 @@ export const RepoCard: React.FC<RepoCardProps> = ({ repo }) => {
               <span>{repo.language}</span>
             </span>
           )}
+
+          {/* Star List Badges */}
+          {repo.lists && repo.lists.length > 0 && (
+            repo.lists.map(listName => (
+              <span
+                key={listName}
+                className="inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] font-medium bg-[#a371f7]/15 text-[#d2a8ff] border border-[#a371f7]/30 rounded select-none"
+                title={`Star List: ${listName}`}
+              >
+                <Bookmark className="w-2.5 h-2.5 text-[#d2a8ff]" aria-hidden="true" />
+                <span>{listName}</span>
+              </span>
+            ))
+          )}
         </div>
+
+
 
         {/* Stars count & Updated date */}
         <div className="flex items-center gap-2.5 text-github-muted ml-auto sm:ml-0">

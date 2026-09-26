@@ -97,6 +97,13 @@ export function validateRepos(data: unknown): ValidationResult {
       errors.push({ index, repoFullName: repoIdentifier, field: 'topics', message: 'Topics must be an array of strings.' });
     }
 
+    // Optional field: lists
+    if (repo.lists !== undefined) {
+      if (!Array.isArray(repo.lists) || !repo.lists.every(item => typeof item === 'string')) {
+        errors.push({ index, repoFullName: repoIdentifier, field: 'lists', message: 'Lists must be an array of strings.' });
+      }
+    }
+
     // Category validation
     if (!repo.category || !ALLOWED_CATEGORIES.includes(repo.category)) {
       errors.push({

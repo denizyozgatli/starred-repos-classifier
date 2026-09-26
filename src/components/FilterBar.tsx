@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from 'react';
-import { Filter, X, Check, ChevronDown, ChevronUp } from 'lucide-react';
+import { Filter, X, Check, ChevronDown, ChevronUp, Bookmark } from 'lucide-react';
 import type { RepositoryCategory } from '../types/repo.ts';
 import type { DynamicFilterOptions } from '../lib/filters.ts';
 import { getLanguageColor } from '../lib/languageColors.ts';
@@ -8,8 +8,10 @@ interface FilterBarProps {
   filterOptions: DynamicFilterOptions;
   selectedCategories: RepositoryCategory[];
   selectedLanguages: string[];
+  selectedList: string | null;
   onToggleCategory: (category: RepositoryCategory) => void;
   onToggleLanguage: (language: string) => void;
+  onSelectList: (list: string | null) => void;
   onClearAll: () => void;
 }
 
@@ -19,13 +21,18 @@ export const FilterBar: React.FC<FilterBarProps> = ({
   filterOptions,
   selectedCategories,
   selectedLanguages,
+  selectedList,
   onToggleCategory,
   onToggleLanguage,
+  onSelectList,
   onClearAll,
 }) => {
   const [showAllLanguages, setShowAllLanguages] = useState(false);
 
-  const activeCount = selectedCategories.length + selectedLanguages.length;
+  const activeCount =
+    selectedCategories.length +
+    selectedLanguages.length +
+    (selectedList ? 1 : 0);
   const hasActiveFilters = activeCount > 0;
 
   // Partition languages into primary (top 5 + any actively selected) and secondary
@@ -73,8 +80,66 @@ export const FilterBar: React.FC<FilterBarProps> = ({
         )}
       </div>
 
+      {/* Star List Pills (Only rendered when dataset contains Star Lists) */}
+      {filterOptions.lists && filterOptions.lists.length > 0 && (
+        <div className="space-y-1">
+          <div className="flex items-center justify-between">
+            <span className="text-[11px] font-semibold uppercase tracking-wider text-github-muted inline-flex items-center gap-1">
+              <Bookmark className="w-3 h-3 text-[#d2a8ff]" aria-hidden="true" />
+              <span>Star List</span>
+            </span>
+            <span className="sm:hidden text-[10px] text-github-muted">Scroll →</span>
+          </div>
+
+          <div className="flex items-center gap-1.5 overflow-x-auto pb-1.5 sm:pb-0 sm:flex-wrap no-scrollbar touch-pan-x">
+            <button
+              type="button"
+              onClick={() => onSelectList(null)}
+              className={`min-h-[34px] sm:min-h-[28px] inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium whitespace-nowrap transition-all focus-visible:ring-2 focus-visible:ring-[#58a6ff] focus-visible:outline-none cursor-pointer ${
+                selectedList === null
+                  ? 'bg-[#a371f7]/20 text-[#d2a8ff] border border-[#a371f7]/60 ring-1 ring-[#a371f7]/30 shadow-xs'
+                  : 'bg-[#21262d]/60 text-[#c9d1d9] border border-[#30363d] hover:bg-[#21262d] hover:text-white hover:border-[#8b949e]/40'
+              }`}
+              aria-pressed={selectedList === null}
+            >
+              {selectedList === null && <Check className="w-3 h-3 text-[#d2a8ff] shrink-0" aria-hidden="true" />}
+              <span>All Lists</span>
+            </button>
+
+            {filterOptions.lists.map(list => {
+              const isSelected = selectedList === list.value;
+              return (
+                <button
+                  key={list.value}
+                  type="button"
+                  onClick={() => onSelectList(isSelected ? null : list.value)}
+                  className={`min-h-[34px] sm:min-h-[28px] inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium whitespace-nowrap transition-all focus-visible:ring-2 focus-visible:ring-[#58a6ff] focus-visible:outline-none cursor-pointer ${
+                    isSelected
+                      ? 'bg-[#a371f7]/20 text-[#d2a8ff] border border-[#a371f7]/60 ring-1 ring-[#a371f7]/30 shadow-xs'
+                      : 'bg-[#21262d]/60 text-[#c9d1d9] border border-[#30363d] hover:bg-[#21262d] hover:text-white hover:border-[#8b949e]/40'
+                  }`}
+                  aria-pressed={isSelected}
+                >
+                  {isSelected && <Check className="w-3 h-3 text-[#d2a8ff] shrink-0" aria-hidden="true" />}
+                  <span>{list.label}</span>
+                  <span
+                    className={`text-[10px] px-1.5 py-0.2 rounded-full font-mono ${
+                      isSelected
+                        ? 'bg-[#a371f7]/30 text-[#d2a8ff]'
+                        : 'bg-[#161b22] text-github-muted'
+                    }`}
+                  >
+                    {list.count}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
       {/* Category Pills (Horizontal scroll on mobile, wrap on desktop) */}
-      <div className="space-y-1">
+      <div className={`space-y-1 ${filterOptions.lists && filterOptions.lists.length > 0 ? 'pt-1 border-t border-[#21262d]' : ''}`}>
         <div className="flex items-center justify-between">
           <span className="text-[11px] font-semibold uppercase tracking-wider text-github-muted">
             Category

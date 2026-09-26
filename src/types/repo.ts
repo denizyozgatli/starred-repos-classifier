@@ -47,6 +47,19 @@ export interface Repository {
   classification: ClassificationMeta;
   archived?: boolean;
   fork?: boolean;
+  lists?: string[];
 }
 
+
 export type ManualOverrides = Record<string, { category: RepositoryCategory }>;
+
+export interface DatasetSource {
+  type: 'github-stars';
+  username?: string;
+}
+
+export interface DatasetMetadata {
+  source: DatasetSource;
+  generatedAt?: string;
+  totalRepos?: number;
+}

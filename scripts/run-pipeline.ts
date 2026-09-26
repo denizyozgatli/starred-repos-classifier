@@ -2,24 +2,37 @@ import { existsSync, readFileSync } from 'node:fs';
 import 'dotenv/config';
 import { computeInputHash, loadCache, saveCache, type ClassificationCache } from './lib/cache.ts';
 import { classifyRepo } from './lib/classifier.ts';
-import { fetchAllStarredRepos } from './lib/github.ts';
+import { fetchAllStarredRepos, parseUsernameFromArgs, resolveActiveUsername } from './lib/github.ts';
+import { fetchUserStarLists, mergeStarLists } from './lib/star-lists.ts';
 import { applyOverrides, loadOverrides } from './lib/overrides.ts';
 import { validateRepos } from './lib/validator.ts';
-import { atomicWriteJson, withDatasetSafety, REPOS_PATH, REPOS_BACKUP_PATH } from './lib/storage.ts';
-import type { Repository } from '../src/types/repo.ts';
+import { atomicWriteJson, withDatasetSafety, REPOS_PATH, REPOS_BACKUP_PATH, METADATA_PATH } from './lib/storage.ts';
+import type { Repository, DatasetMetadata } from '../src/types/repo.ts';
 
 export async function executePipeline(): Promise<void> {
   console.log('=== GitHub Starred Repos Classifier Data Pipeline ===');
 
+  const username = parseUsernameFromArgs();
   const hasExistingData = existsSync(REPOS_PATH);
 
   // Step 1: Fetch starred repositories from GitHub
-  console.log('[pipeline] Fetching starred repositories from GitHub API...');
-  const rawRepos = await fetchAllStarredRepos({
+  console.log(`[pipeline] Fetching starred repositories from GitHub API${username ? ` for user "${username}"` : ' (authenticated user)'}...`);
+  const fetchedRepos = await fetchAllStarredRepos({
+    username,
     onPageFetched: (page, count) => {
       console.log(`  Fetched page ${page} (${count} repositories)`);
     },
   });
+
+  const activeUser = await resolveActiveUsername({ username });
+  if (activeUser) {
+    console.log(`[pipeline] Resolved active dataset username: @${activeUser}`);
+  }
+
+  // Step 1.5: Retrieve Star Lists via GitHub GraphQL API where supported
+  const token = process.env.GITHUB_TOKEN;
+  const starListsMap = await fetchUserStarLists({ token, username: activeUser || username });
+  const rawRepos = mergeStarLists(fetchedRepos, starListsMap);
 
   console.log(`[pipeline] Successfully fetched ${rawRepos.length} total repositories.`);
 
@@ -94,7 +107,21 @@ export async function executePipeline(): Promise<void> {
       if (existingRepos.length === finalRepos.length) {
         const isIdentical = finalRepos.every((r, idx) => {
           const ex = existingRepos[idx];
-          return ex && ex.id === r.id && ex.category === r.category && ex.stars === r.stars && ex.updatedAt === r.updatedAt;
+          if (!ex) return false;
+
+          const basePropsMatch =
+            ex.id === r.id &&
+            ex.category === r.category &&
+            ex.stars === r.stars &&
+            ex.updatedAt === r.updatedAt;
+
+          const exLists = ex.lists || [];
+          const rLists = r.lists || [];
+          const listsMatch =
+            exLists.length === rLists.length &&
+            rLists.every((l, lIdx) => exLists[lIdx] === l);
+
+          return basePropsMatch && listsMatch;
         });
         if (isIdentical) {
           hasChanged = false;
@@ -105,12 +132,24 @@ export async function executePipeline(): Promise<void> {
     }
   }
 
-  if (!hasChanged) {
+  const existingMetaRaw = existsSync(METADATA_PATH) ? readFileSync(METADATA_PATH, 'utf-8') : null;
+  const newMeta: DatasetMetadata = {
+    source: {
+      type: 'github-stars',
+      ...(activeUser ? { username: activeUser } : {}),
+    },
+    generatedAt: new Date().toISOString(),
+    totalRepos: finalRepos.length,
+  };
+
+  if (!hasChanged && existingMetaRaw) {
     console.log('[pipeline] Dataset is unchanged. No write needed.');
   } else {
     // Step 7: Atomic write via temporary file swap
     atomicWriteJson(REPOS_PATH, finalRepos);
     console.log(`[pipeline] Atomically saved ${finalRepos.length} validated repositories to ${REPOS_PATH}`);
+    atomicWriteJson(METADATA_PATH, newMeta);
+    console.log(`[pipeline] Saved dataset metadata to ${METADATA_PATH}`);
     saveCache(cache);
   }
 

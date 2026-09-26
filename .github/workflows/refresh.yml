@@ -23,7 +23,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          ref: master
+          ref: ${{ github.ref_name }}
           fetch-depth: 0
 
       - name: Setup Node.js
@@ -38,6 +38,7 @@ jobs:
       - name: Run data pipeline (fetch, classify, overrides, validate)
         env:
           GITHUB_TOKEN: ${{ secrets.PAT_GITHUB_TOKEN || secrets.GITHUB_TOKEN }}
+          GITHUB_USERNAME: ${{ vars.GITHUB_USERNAME || secrets.GITHUB_USERNAME || '' }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: npm run pipeline:run
 
@@ -52,30 +53,34 @@ jobs:
 
       - name: Commit and push changes if updated
         run: |
+          BRANCH="${{ github.ref_name }}"
           # Ensure git has the latest remote state
-          git fetch origin master
+          git fetch origin "$BRANCH"
 
-          # Stash newly generated repos.json in a temporary location outside git
-          TEMP_REPOS="$(mktemp)"
-          cp data/repos.json "$TEMP_REPOS"
+          # Stash newly generated repos.json and metadata.json in a temporary location outside git
+          TEMP_DIR="$(mktemp -d)"
+          cp data/repos.json "$TEMP_DIR/repos.json"
+          [ -f data/metadata.json ] && cp data/metadata.json "$TEMP_DIR/metadata.json"
 
-          # Synchronize local branch to latest origin/master
-          git checkout -B master origin/master
+          # Synchronize local branch to latest origin/$BRANCH
+          git checkout -B "$BRANCH" origin/"$BRANCH"
 
-          # Restore newly generated repos.json
-          cp "$TEMP_REPOS" data/repos.json
-          rm -f "$TEMP_REPOS"
+          # Restore newly generated files
+          cp "$TEMP_DIR/repos.json" data/repos.json
+          [ -f "$TEMP_DIR/metadata.json" ] && cp "$TEMP_DIR/metadata.json" data/metadata.json
+          rm -rf "$TEMP_DIR"
 
-          # Check if data/repos.json has changes against latest origin/master
-          if git diff --exit-code data/repos.json > /dev/null; then
-            echo "No changes detected in data/repos.json against origin/master."
+          # Check if dataset files have changes against latest origin/$BRANCH
+          if git diff --exit-code data/repos.json data/metadata.json > /dev/null 2>&1; then
+            echo "No changes detected in dataset against origin/$BRANCH."
           else
-            echo "Changes detected in data/repos.json. Committing and pushing..."
+            echo "Changes detected in dataset. Committing and pushing..."
             git config --local user.email "github-actions[bot]@users.noreply.github.com"
             git config --local user.name "github-actions[bot]"
             git add data/repos.json
+            [ -f data/metadata.json ] && git add data/metadata.json
             git commit -m "chore(data): refresh starred repositories dataset [skip ci]"
-            git push origin master
+            git push origin "$BRANCH"
           fi
 
       - name: Upload GitHub Pages artifact

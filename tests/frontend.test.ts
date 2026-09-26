@@ -117,8 +117,15 @@ describe('Frontend Logic', () => {
   });
 
   describe('Dynamic Filters', () => {
-    it('extracts categories and languages dynamically without hardcoding', () => {
-      const { categories, languages } = extractFilterOptions(SAMPLE_REPOS);
+    it('extracts categories, languages, and star lists dynamically without hardcoding', () => {
+      const reposWithLists: Repository[] = [
+        { ...SAMPLE_REPOS[0], lists: ['Favorites', 'Frontend Toolkit'] },
+        { ...SAMPLE_REPOS[1], lists: ['Favorites', 'Backend Tools'] },
+        { ...SAMPLE_REPOS[2], lists: [] },
+        { ...SAMPLE_REPOS[3] },
+      ];
+
+      const { categories, languages, lists } = extractFilterOptions(reposWithLists);
 
       expect(categories).toEqual(
         expect.arrayContaining([
@@ -132,6 +139,52 @@ describe('Frontend Logic', () => {
       // Python appears twice (fastapi and transformers)
       const pythonOption = languages.find(l => l.value === 'Python');
       expect(pythonOption).toEqual({ value: 'Python', label: 'Python', count: 2 });
+
+      // Star lists extracted with accurate counts and sorted by count descending
+      expect(lists).toEqual([
+        { value: 'Favorites', label: 'Favorites', count: 2 },
+        { value: 'Backend Tools', label: 'Backend Tools', count: 1 },
+        { value: 'Frontend Toolkit', label: 'Frontend Toolkit', count: 1 },
+      ]);
+    });
+
+    it('filters by star list', () => {
+      const reposWithLists: Repository[] = [
+        { ...SAMPLE_REPOS[0], lists: ['Favorites', 'Frontend Toolkit'] },
+        { ...SAMPLE_REPOS[1], lists: ['Favorites', 'Backend Tools'] },
+        { ...SAMPLE_REPOS[2], lists: [] },
+        { ...SAMPLE_REPOS[3] },
+      ];
+
+      const favorites = filterRepositories(reposWithLists, [], [], 'Favorites');
+      expect(favorites).toHaveLength(2);
+      expect(favorites.map(r => r.name)).toEqual(['react', 'fastapi']);
+
+      const backendOnly = filterRepositories(reposWithLists, [], [], 'Backend Tools');
+      expect(backendOnly).toHaveLength(1);
+      expect(backendOnly[0].name).toBe('fastapi');
+
+      const nonExistent = filterRepositories(reposWithLists, [], [], 'Unknown List');
+      expect(nonExistent).toHaveLength(0);
+    });
+
+    it('intersects star list filter with category and language filters', () => {
+      const reposWithLists: Repository[] = [
+        { ...SAMPLE_REPOS[0], lists: ['Favorites'] },
+        { ...SAMPLE_REPOS[1], lists: ['Favorites'] },
+        { ...SAMPLE_REPOS[2], lists: [] },
+        { ...SAMPLE_REPOS[3], lists: ['Favorites'] },
+      ];
+
+      // Favorite repos that are Python: fastapi & transformers
+      const favPython = filterRepositories(reposWithLists, [], ['Python'], 'Favorites');
+      expect(favPython).toHaveLength(2);
+      expect(favPython.map(r => r.name)).toEqual(['fastapi', 'transformers']);
+
+      // Favorite repos in ML / AI and Python: transformers
+      const favMlPython = filterRepositories(reposWithLists, ['ML / AI'], ['Python'], 'Favorites');
+      expect(favMlPython).toHaveLength(1);
+      expect(favMlPython[0].name).toBe('transformers');
     });
 
     it('filters by category', () => {
@@ -191,6 +244,7 @@ describe('Frontend Logic', () => {
         query: 'docker',
         categories: ['DevOps / Infra'],
         languages: ['Go'],
+        list: 'DevOps Tools',
         sortBy: 'stars',
       };
 
@@ -198,6 +252,7 @@ describe('Frontend Logic', () => {
       expect(qs).toContain('q=docker');
       expect(qs).toContain('category=DevOps+%2F+Infra');
       expect(qs).toContain('language=Go');
+      expect(qs).toContain('list=DevOps+Tools');
       expect(qs).toContain('sort=stars');
     });
 
@@ -206,6 +261,7 @@ describe('Frontend Logic', () => {
         query: '',
         categories: [],
         languages: [],
+        list: null,
         sortBy: 'relevance',
       };
 
@@ -218,6 +274,7 @@ describe('Frontend Logic', () => {
       expect(state.query).toBe('');
       expect(state.categories).toEqual([]);
       expect(state.languages).toEqual([]);
+      expect(state.list).toBeNull();
       expect(state.sortBy).toBe('relevance');
     });
   });

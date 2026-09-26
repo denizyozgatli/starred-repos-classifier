@@ -35,25 +35,17 @@ export function computeInputHash(repo: {
 }
 
 /**
- * Loads cache from data/.cache.json and seeds previously successful classifications
- * from data/repos.json (which persists across GitHub Actions runs).
+ * Loads classification cache.
+ * Authoritative existing dataset classifications from data/repos.json take precedence over
+ * transient local cache entries in data/.cache.json.
+ * data/.cache.json is only used to backfill entries not present in the authoritative dataset.
  * Fallback classifications are NEVER included in the cache.
  */
 export function loadCache(customPath?: string, seedReposPath?: string | null): ClassificationCache {
   const filePath = customPath || CACHE_PATH;
-  let cache: ClassificationCache = {};
+  const cache: ClassificationCache = {};
 
-  if (existsSync(filePath)) {
-    try {
-      const raw = readFileSync(filePath, 'utf-8');
-      cache = JSON.parse(raw);
-    } catch (error) {
-      console.warn(`[cache] Failed to read cache from ${filePath}, starting fresh:`, error);
-      cache = {};
-    }
-  }
-
-  // Seed previously successful classifications from tracked data/repos.json if available:
+  // 1. Seed authoritative classifications from data/repos.json FIRST:
   // Only seed when seedReposPath is explicitly provided, or when customPath is omitted (production pipeline).
   const shouldSeed = seedReposPath !== null && (seedReposPath !== undefined || customPath === undefined);
   const seedFile = shouldSeed ? (seedReposPath || DEFAULT_REPOS_PATH) : null;
@@ -72,18 +64,42 @@ export function loadCache(customPath?: string, seedReposPath?: string | null): C
             repo.classification.method !== 'fallback' &&
             repo.classification.inputHash
           ) {
-            // Seed if not present or if cached entry was a fallback
-            if (!cache[repo.fullName] || cache[repo.fullName].classification?.method === 'fallback') {
-              cache[repo.fullName] = {
-                category: repo.category,
-                classification: repo.classification,
-              };
-            }
+            cache[repo.fullName] = {
+              category: repo.category,
+              classification: repo.classification,
+            };
           }
         }
       }
     } catch (err) {
       console.warn(`[cache] Warning: Failed to seed cache from ${seedFile}:`, err);
+    }
+  }
+
+  // 2. Backfill with data/.cache.json for repositories NOT already seeded from the authoritative dataset
+  if (existsSync(filePath)) {
+    try {
+      const raw = readFileSync(filePath, 'utf-8');
+      const diskCache = JSON.parse(raw);
+      if (diskCache && typeof diskCache === 'object') {
+        for (const [key, entry] of Object.entries(diskCache as Record<string, CacheEntry>)) {
+          if (
+            entry &&
+            entry.category &&
+            entry.classification &&
+            entry.classification.method &&
+            entry.classification.method !== 'fallback' &&
+            entry.classification.inputHash
+          ) {
+            // Only backfill if NOT already seeded by the authoritative dataset
+            if (!cache[key]) {
+              cache[key] = entry;
+            }
+          }
+        }
+      }
+    } catch (error) {
+      console.warn(`[cache] Failed to read cache from ${filePath}, starting fresh:`, error);
     }
   }
 

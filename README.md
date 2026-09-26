@@ -11,12 +11,13 @@ The application runs entirely as a static frontend with no runtime backend serve
 ## Features
 
 - **Automated Repository Classification**: Classifies starred repositories using deterministic rules based on language, topics, name, and description, falling back to Gemini for ambiguous metadata.
+- **GitHub Star Lists Support**: Fetches user-curated Star Lists via GitHub's GraphQL API. Repositories display GitHub-styled purple list badges and can be filtered by specific lists, seamlessly combining with category and language filters.
 - **Fast Client-Side Search (<100ms)**: Real-time fuzzy searching across repository names, owners, descriptions, topics, and languages via Fuse.js.
 - **Search Usability**: Accessible `/` keyboard shortcut to focus search, a custom clear button, and suppression of duplicate browser-native search cancel controls.
-- **Faceted Category Filtering**: 10 primary categories with live repository counts and horizontal scrolling on mobile.
+- **Faceted Category & Star List Filtering**: 10 primary categories and dynamic Star List pills with live repository counts, supporting horizontal scrolling on mobile.
 - **Language Filtering**: Dynamically populated from active repositories with counts and an expandable `+N more` selector.
 - **Sorting Options**: Sort by relevance, most stars, recently updated, or alphabetically (A–Z) using a custom accessible listbox styled to match GitHub's dark aesthetic.
-- **Deep-Link URL State**: URL search parameters (`q`, `category`, `language`, `sort`) synchronize bidirectionally, making every search and filter view shareable and bookmarkable.
+- **Deep-Link URL State**: URL search parameters (`q`, `category`, `language`, `list`, `sort`) synchronize bidirectionally, making every search and filter view shareable and bookmarkable.
 - **Responsive Layout**: Clean desktop grid with mobile-optimized touch controls and zero horizontal overflow across all screen sizes.
 - **Full-Card Navigation**: Entire card surfaces are clickable directly to GitHub repositories, complete with GitHub language color indicators and topic badges.
 
@@ -25,7 +26,7 @@ The application runs entirely as a static frontend with no runtime backend serve
 ## Architecture
 
 ```
-GitHub API (GET /user/starred)
+GitHub API (GET /users/{username}/starred OR GET /user/starred)
        │
        ▼
 Fetch & Normalization (scripts/fetch.ts)
@@ -51,18 +52,21 @@ Gemini LLM Fallback (gemini-3.8-flash, ~4.8 RPM rate-limited)
 Strict Schema Validation (scripts/validate.ts)
        │
        ▼
-data/repos.json (Static Dataset)
+data/repos.json + data/metadata.json (Static Dataset & Active Identity)
        │
        ▼
-React 19 + Vite Static Build ──► GitHub Pages
+React 19 + Vite Static Build ──► GitHub Pages / Static Host
 ```
 
 ### Static Data & Cache Design
 
-- **Zero Client Runtime Overhead**: The frontend never connects to GitHub or Gemini; it consumes the pre-generated `data/repos.json` bundle directly.
+- **Zero Client Runtime Overhead**: The frontend never connects to GitHub or Gemini; it consumes the pre-generated `data/repos.json` and `data/metadata.json` bundle directly.
 - **Persistent Cache Source**: `data/repos.json` is committed to git and acts as the persistent cache seed across ephemeral GitHub Actions runners.
+- **Dataset Identity Metadata**: `data/metadata.json` records the active dataset source and GitHub username (`source: { type: "github-stars", username: "..." }`), decoupling the displayed dataset from permanent project attribution.
 - **Local Cache**: `data/.cache.json` is used during local script runs and is gitignored.
 - **Transient Fallbacks**: If Gemini returns a rate-limit (429) or unavailable (503) error, the repository is assigned `category: "Other"` with `method: "fallback"`. Fallback results are **never** persisted to cache, ensuring they remain eligible for re-classification on future pipeline runs.
+- **GitHub Star Lists (GraphQL)**: Curated star list memberships are fetched via GitHub's GraphQL API when a token (`GITHUB_TOKEN`) is available. If running unauthenticated against public stars, Star Lists retrieval is gracefully skipped (`lists: []`) without breaking the ingestion pipeline.
+
 
 ---
 
@@ -90,6 +94,7 @@ React 19 + Vite Static Build ──► GitHub Pages
 │   └── refresh.yml            # CI/CD: scheduled refresh, tests, build, and Pages deploy
 ├── data/
 │   ├── repos.json             # Validated production dataset (committed persistent cache)
+│   ├── metadata.json          # Dataset metadata and active username source
 │   ├── overrides.json         # Manual category overrides (top priority)
 │   ├── benchmark.json         # 30-sample development baseline benchmark
 │   └── unseen-test.json       # 30-sample unseen generalization evaluation set
@@ -107,9 +112,10 @@ React 19 + Vite Static Build ──► GitHub Pages
 │   ├── types/                 # TypeScript interfaces for repos and classification metadata
 │   ├── App.tsx                # Main view orchestrator
 │   └── index.css              # Global styles, Tailwind directives, and CSS resets
-├── tests/                     # 79 unit/integration tests (pipeline, storage, classifier, frontend)
+├── tests/                     # 84 unit/integration tests (pipeline, storage, classifier, frontend)
 ├── package.json               # Scripts and dependency declarations
-└── vite.config.ts             # Vite configuration with GitHub Pages base path
+└── vite.config.ts             # Vite configuration with portable base path
+
 ```
 
 ---
@@ -178,24 +184,38 @@ cd starred-repos-classifier
 npm install
 ```
 
-### 2. Environment Configuration
+### 2. Modes of Operation & Environment Configuration
 
-Create a local `.env` file:
+The pipeline supports two ingestion modes:
 
+#### Option A: Public Username Mode (Recommended for exploring any user's stars)
+Fetch public stars for any GitHub user without requiring private token scopes:
 ```bash
-cp .env.example .env
-```
+# Via CLI flag:
+npm run pipeline:run -- --username octocat
 
-Populate the variables:
+# Or via environment variable in .env:
+GITHUB_USERNAME=octocat
+```
+*(Note: Passing `GITHUB_TOKEN` alongside `GITHUB_USERNAME` increases GitHub API rate limits from 60 to 5,000 requests/hour).*
+
+#### Option B: Authenticated User Mode
+Fetch starred repositories for the authenticated token owner:
 ```env
-# Required to fetch starred repositories:
+# Required for authenticated user stars:
 GITHUB_TOKEN=ghp_your_personal_access_token
 
 # Optional for Gemini fallback classification:
 GEMINI_API_KEY=your_gemini_api_key
 ```
 
-### 3. Run the Frontend
+### 3. Identity & Attribution Model
+
+The application strictly separates two distinct identities:
+- **Project Attribution (Permanent)**: Created by **Deniz Yozgatlı** with source repository [denizyozgatli/starred-repos-classifier](https://github.com/denizyozgatli/starred-repos-classifier). This attribution is preserved in the application footer across all forks and deployments.
+- **Active Dataset Identity (Dynamic)**: Communicates the owner of the currently displayed repository dataset. Recorded in `data/metadata.json` by the pipeline and rendered dynamically in the header (`Starred by @<username>`). Can also be overridden at build time via `VITE_GITHUB_USERNAME`.
+
+### 4. Run the Frontend
 
 ```bash
 npm run dev
@@ -211,14 +231,15 @@ Open `http://localhost:3000` (or `http://localhost:5173`) in your browser.
 | `dev` | `vite` | Starts local development server |
 | `build` | `tsc && vite build` | Typechecks and builds static assets in `dist/` |
 | `preview` | `vite preview` | Serves the local `dist/` production build |
-| `test` | `vitest run` | Runs all 79 unit and integration tests |
+| `test` | `vitest run` | Runs all 84 unit and integration tests |
 | `test:watch` | `vitest` | Runs tests in interactive watch mode |
 | `pipeline:run` | `tsx scripts/run-pipeline.ts` | Runs the full pipeline: fetch, classify, and validate |
 | `pipeline:fetch` | `tsx scripts/fetch.ts` | Fetches starred repositories from GitHub API |
 | `pipeline:classify`| `tsx scripts/classify.ts` | Classifies repositories with rules, cache, and Gemini |
-| `pipeline:validate`| `tsx scripts/validate.ts` | Validates `data/repos.json` against schema and constraints |
+| `pipeline:validate`| `tsx scripts/validate.ts` | Validates `data/repos.json` and `data/metadata.json` |
 | `evaluate` | `tsx scripts/evaluate-classifier.ts` | Evaluates rule classifier against baseline benchmark (30 samples) |
 | `evaluate:unseen` | `tsx scripts/evaluate-unseen.ts` | Evaluates rule classifier against unseen test set (30 samples) |
+
 
 ---
 
@@ -264,19 +285,22 @@ The workflow (`.github/workflows/refresh.yml`) manages data synchronization and 
 1. Runs `npm ci`.
 2. Executes `npm run pipeline:run` (fetch, classify with rate limiting, apply overrides, validate).
 3. Executes `npm test` and `npm run build`.
-4. Checks for differences in `data/repos.json`. If updated, commits changes with message `chore(data): refresh starred repositories dataset [skip ci]` and pushes to `master`.
+4. Checks for differences in `data/repos.json` and `data/metadata.json`. If updated, commits changes with message `chore(data): refresh starred repositories dataset [skip ci]` and pushes dynamically to the active workflow branch (`${{ github.ref_name }}`).
 5. Uploads `dist/` as a Pages artifact and deploys to GitHub Pages (`actions/deploy-pages@v4`).
 
 ---
 
-## Required Secrets
+## Secrets & Configuration for Forks / Self-Hosting
 
 Configure these in your GitHub repository under **Settings > Secrets and variables > Actions**:
 
-| Secret Name | Required | Purpose |
-|---|---|---|
-| `PAT_GITHUB_TOKEN` | Yes | Personal Access Token with permissions to read user stars (mapped to `GITHUB_TOKEN` in the workflow environment; falls back to repository `GITHUB_TOKEN`) |
-| `GEMINI_API_KEY` | Optional | Google Gemini API key for fallback LLM classification |
+| Name | Type | Required | Purpose |
+|---|---|---|---|
+| `GITHUB_USERNAME` | Variable or Secret | Optional | Target public GitHub username to fetch stars for (recommended for forks) |
+| `PAT_GITHUB_TOKEN` | Secret | Optional | Personal Access Token with permissions to read authenticated user stars |
+| `GEMINI_API_KEY` | Secret | Optional | Google Gemini API key for fallback LLM classification |
+
+*Fork Tip*: If you fork this project, you can simply set the repository variable `GITHUB_USERNAME=<your_github_handle>` to automatically fetch and classify your public stars on schedule without needing to create a Personal Access Token.
 
 ---
 
@@ -289,12 +313,14 @@ Configure these in your GitHub repository under **Settings > Secrets and variabl
 
 ---
 
-## Deployment
+## Deployment & Hosting Portability
 
-The application is deployed on **GitHub Pages**:
-- **Production URL**: [https://denizyozgatli.github.io/starred-repos-classifier/](https://denizyozgatli.github.io/starred-repos-classifier/)
-- **Base Path**: `/starred-repos-classifier/` configured in `vite.config.ts`.
-- **Deployment Process**: Static assets built from `dist/` are deployed automatically during the daily scheduled run or upon triggering `workflow_dispatch`.
+The application is statically compiled and portable to any hosting environment:
+
+- **GitHub Pages (Canonical Production)**: [https://denizyozgatli.github.io/starred-repos-classifier/](https://denizyozgatli.github.io/starred-repos-classifier/)
+- **Dynamic Repository Subpath**: In GitHub Actions CI, `vite.config.ts` automatically infers the base path from `GITHUB_REPOSITORY` (e.g. `/<repo-name>/`), allowing forks to deploy to GitHub Pages without code changes.
+- **Root Domain / Custom Domain / Vercel / Netlify / Cloudflare**: Set the environment variable `BASE_PATH=/` (or `BASE_PATH=./`) during build to serve from root or relative paths.
+- **Default Fallback**: Defaults to `/starred-repos-classifier/` for backward compatibility.
 
 ---
 
@@ -311,4 +337,4 @@ The application is deployed on **GitHub Pages**:
 
 ## Current Status
 
-The application is fully operational and actively deployed to GitHub Pages. All 79 automated tests pass cleanly, and the production site serves 92 categorized starred repositories with real-time search and filtering.
+The application is fully operational and actively deployed to GitHub Pages. All 84 automated tests pass cleanly, and the production site serves 92 categorized starred repositories with real-time search, filtering, and dynamic dataset identity.
