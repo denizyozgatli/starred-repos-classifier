@@ -4,6 +4,7 @@ import { searchRepositories } from '../src/lib/search.ts';
 import { extractFilterOptions, filterRepositories } from '../src/lib/filters.ts';
 import { sortRepositories } from '../src/lib/sorting.ts';
 import { stateToQueryString, readStateFromUrl, type DashboardState } from '../src/lib/urlState.ts';
+import { parseAndValidateDataset, validateDataset } from '../src/lib/datasetValidation.ts';
 
 const SAMPLE_REPOS: Repository[] = [
   {
@@ -296,6 +297,137 @@ describe('Frontend Logic', () => {
       expect(getLanguageColor(undefined)).toBe('#8b949e');
       expect(getLanguageColor(null)).toBe('#8b949e');
       expect(getLanguageColor('UnknownLangXYZ')).toBe('#8b949e');
+    });
+  });
+
+  describe('Dataset Validation (P2.1 Local Import)', () => {
+    it('successfully parses and validates a well-formed JSON dataset', () => {
+      const json = JSON.stringify(SAMPLE_REPOS);
+      const result = parseAndValidateDataset(json);
+
+      expect(result.valid).toBe(true);
+      expect(result.data).toHaveLength(SAMPLE_REPOS.length);
+      expect(result.data?.[0].fullName).toBe('facebook/react');
+    });
+
+    it('rejects malformed JSON syntax with a helpful error', () => {
+      const result = parseAndValidateDataset('{ invalid json content');
+
+      expect(result.valid).toBe(false);
+      expect(result.error).toContain('Invalid JSON format');
+    });
+
+    it('rejects empty or whitespace-only files', () => {
+      const resultEmpty = parseAndValidateDataset('');
+      expect(resultEmpty.valid).toBe(false);
+      expect(resultEmpty.error).toContain('file is empty');
+
+      const resultWhitespace = parseAndValidateDataset('   \n  \t ');
+      expect(resultWhitespace.valid).toBe(false);
+      expect(resultWhitespace.error).toContain('file is empty');
+    });
+
+    it('rejects non-array JSON inputs', () => {
+      const resultObject = parseAndValidateDataset(JSON.stringify({ repo: 'single' }));
+      expect(resultObject.valid).toBe(false);
+      expect(resultObject.error).toContain('must be a JSON array of repositories');
+
+      const resultPrimitive = parseAndValidateDataset(JSON.stringify(12345));
+      expect(resultPrimitive.valid).toBe(false);
+      expect(resultPrimitive.error).toContain('must be a JSON array of repositories');
+    });
+
+    it('rejects an empty array of repositories', () => {
+      const result = parseAndValidateDataset('[]');
+      expect(result.valid).toBe(false);
+      expect(result.error).toContain('contains 0 repositories');
+    });
+
+    it('rejects items that are not objects', () => {
+      const result = validateDataset(['string-item' as unknown as Repository]);
+      expect(result.valid).toBe(false);
+      expect(result.error).toContain('not a valid repository object');
+    });
+
+    it('rejects missing or invalid required fields', () => {
+      // Missing id
+      const missingId = [{ ...SAMPLE_REPOS[0], id: undefined }];
+      expect(validateDataset(missingId as unknown as Repository[]).valid).toBe(false);
+
+      // Missing name
+      const missingName = [{ ...SAMPLE_REPOS[0], name: '' }];
+      expect(validateDataset(missingName as unknown as Repository[]).valid).toBe(false);
+
+      // Invalid stars
+      const negativeStars = [{ ...SAMPLE_REPOS[0], stars: -5 }];
+      expect(validateDataset(negativeStars as unknown as Repository[]).valid).toBe(false);
+
+      // Non-array topics
+      const invalidTopics = [{ ...SAMPLE_REPOS[0], topics: 'not-array' }];
+      expect(validateDataset(invalidTopics as unknown as Repository[]).valid).toBe(false);
+
+      // Invalid URL
+      const invalidUrl = [{ ...SAMPLE_REPOS[0], url: 'ftp://ftp.example.com' }];
+      expect(validateDataset(invalidUrl as unknown as Repository[]).valid).toBe(false);
+
+      // Invalid updatedAt date
+      const invalidDate = [{ ...SAMPLE_REPOS[0], updatedAt: 'not-a-date' }];
+      expect(validateDataset(invalidDate as unknown as Repository[]).valid).toBe(false);
+    });
+
+    it('rejects invalid or unknown repository categories', () => {
+      const invalidCategory = [{ ...SAMPLE_REPOS[0], category: 'NonExistentCategory' }];
+      const result = validateDataset(invalidCategory as unknown as Repository[]);
+      expect(result.valid).toBe(false);
+      expect(result.error).toContain('invalid category');
+    });
+
+    it('rejects invalid classification object', () => {
+      // Missing classification
+      const missingClassification = [{ ...SAMPLE_REPOS[0], classification: undefined }];
+      expect(validateDataset(missingClassification as unknown as Repository[]).valid).toBe(false);
+
+      // Invalid classification method
+      const invalidMethod = [{
+        ...SAMPLE_REPOS[0],
+        classification: { ...SAMPLE_REPOS[0].classification, method: 'unsupported-method' },
+      }];
+      expect(validateDataset(invalidMethod as unknown as Repository[]).valid).toBe(false);
+    });
+
+    it('rejects datasets with duplicate IDs or fullNames', () => {
+      const duplicateIds = [
+        SAMPLE_REPOS[0],
+        { ...SAMPLE_REPOS[1], id: SAMPLE_REPOS[0].id },
+      ];
+      const resultId = validateDataset(duplicateIds);
+      expect(resultId.valid).toBe(false);
+      expect(resultId.error).toContain('Duplicate repository ID');
+
+      const duplicateNames = [
+        SAMPLE_REPOS[0],
+        { ...SAMPLE_REPOS[1], id: 999, fullName: SAMPLE_REPOS[0].fullName },
+      ];
+      const resultName = validateDataset(duplicateNames);
+      expect(resultName.valid).toBe(false);
+      expect(resultName.error).toContain('Duplicate repository fullName');
+    });
+
+    it('validates optional star lists correctly', () => {
+      // Valid string list names
+      const withValidLists: Repository[] = [
+        { ...SAMPLE_REPOS[0], lists: ['AI Research', 'Frontend Tools'] },
+      ];
+      const resultValid = validateDataset(withValidLists);
+      expect(resultValid.valid).toBe(true);
+
+      // Invalid list (non-string item)
+      const withInvalidLists = [
+        { ...SAMPLE_REPOS[0], lists: [123] },
+      ];
+      const resultInvalid = validateDataset(withInvalidLists as unknown as Repository[]);
+      expect(resultInvalid.valid).toBe(false);
+      expect(resultInvalid.error).toContain('must be an array of strings');
     });
   });
 });

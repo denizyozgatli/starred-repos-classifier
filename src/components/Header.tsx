@@ -1,13 +1,25 @@
 import React from 'react';
-import { Star } from 'lucide-react';
+import { Star, Upload } from 'lucide-react';
 
 interface HeaderProps {
   totalCount: number;
   filteredCount: number;
   datasetOwner?: string;
+  isImported?: boolean;
+  importedFileName?: string;
+  onOpenImport: () => void;
+  onResetToDefault?: () => void;
 }
 
-export const Header: React.FC<HeaderProps> = ({ totalCount, filteredCount, datasetOwner }) => {
+export const Header: React.FC<HeaderProps> = ({
+  totalCount,
+  filteredCount,
+  datasetOwner,
+  isImported = false,
+  importedFileName,
+  onOpenImport,
+  onResetToDefault,
+}) => {
   const isFiltered = totalCount !== filteredCount;
 
   return (
@@ -22,14 +34,47 @@ export const Header: React.FC<HeaderProps> = ({ totalCount, filteredCount, datas
             <h1 className="text-sm sm:text-base font-bold text-white tracking-tight leading-none">
               Starred Repositories
             </h1>
-            <p className="text-[11px] text-github-muted mt-1 leading-none">
-              {datasetOwner ? `Starred by @${datasetOwner}` : 'Personal developer catalog'}
-            </p>
+            {isImported ? (
+              <div className="flex items-center gap-1.5 mt-1 leading-none">
+                <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-[#a371f7]/15 text-[#d2a8ff] border border-[#a371f7]/30 max-w-[180px] sm:max-w-xs truncate">
+                  Imported: {importedFileName || 'local file'}
+                </span>
+                {onResetToDefault && (
+                  <button
+                    type="button"
+                    onClick={onResetToDefault}
+                    className="text-[11px] text-github-muted hover:text-white underline decoration-github-muted underline-offset-2 transition-colors cursor-pointer"
+                    title="Switch back to default bundled dataset"
+                  >
+                    Reset
+                  </button>
+                )}
+              </div>
+            ) : (
+              <p className="text-[11px] text-github-muted mt-1 leading-none">
+                {datasetOwner ? `Starred by @${datasetOwner}` : 'Personal developer catalog'}
+              </p>
+            )}
           </div>
         </div>
 
-        {/* Counter & GitHub Profile Access */}
-        <div className="flex items-center gap-2 sm:gap-3">
+        {/* Counter, Import Control & GitHub Profile Access */}
+        <div className="flex items-center gap-2 sm:gap-2.5">
+          <button
+            type="button"
+            onClick={onOpenImport}
+            className={`inline-flex items-center gap-1.5 px-2.5 sm:px-3 py-1 text-xs font-medium rounded-lg border transition-colors focus-visible:ring-2 focus-visible:ring-[#58a6ff] focus-visible:outline-none ${
+              isImported
+                ? 'bg-[#a371f7]/15 border-[#a371f7]/40 text-[#d2a8ff] hover:bg-[#a371f7]/25'
+                : 'bg-[#21262d] border-[#30363d] text-white/90 hover:bg-[#30363d] hover:text-white'
+            }`}
+            title="Import a local repos.json dataset"
+            aria-label="Import a local repos.json dataset"
+          >
+            <Upload className="w-3.5 h-3.5" aria-hidden="true" />
+            <span className="hidden sm:inline">Import JSON</span>
+            <span className="sm:hidden">Import</span>
+          </button>
           <div
             className="text-xs font-medium text-github-muted bg-[#21262d] px-2.5 sm:px-3 py-1 rounded-full border border-[#30363d] whitespace-nowrap"
             aria-live="polite"

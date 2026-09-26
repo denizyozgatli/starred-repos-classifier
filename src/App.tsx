@@ -7,6 +7,7 @@ import { searchRepositories } from './lib/search.ts';
 import { sortRepositories, type SortOption } from './lib/sorting.ts';
 import { readStateFromUrl, syncStateToUrl } from './lib/urlState.ts';
 import { Header } from './components/Header.tsx';
+import { ImportModal } from './components/ImportModal.tsx';
 import { SearchBar } from './components/SearchBar.tsx';
 import { FilterBar } from './components/FilterBar.tsx';
 import { SortSelector } from './components/SortSelector.tsx';
@@ -20,7 +21,9 @@ const datasetOwner = metaEnv?.VITE_GITHUB_USERNAME?.trim() || metadata?.source?.
 
 
 export default function App() {
-  const [repos] = useState<Repository[]>(staticRepos as Repository[]);
+  const [repos, setRepos] = useState<Repository[]>(staticRepos as Repository[]);
+  const [importedFileName, setImportedFileName] = useState<string | null>(null);
+  const [isImportModalOpen, setIsImportModalOpen] = useState(false);
 
   const [loading] = useState<boolean>(false);
   const [error] = useState<string | null>(null);
@@ -104,6 +107,28 @@ export default function App() {
     setSortBy('relevance');
   }, []);
 
+  const isImported = importedFileName !== null;
+
+  const handleImport = useCallback((newRepos: Repository[], fileName: string) => {
+    setRepos(newRepos);
+    setImportedFileName(fileName);
+    setQuery('');
+    setSelectedCategories([]);
+    setSelectedLanguages([]);
+    setSelectedList(null);
+    setSortBy('relevance');
+  }, []);
+
+  const handleResetToDefault = useCallback(() => {
+    setRepos(staticRepos as Repository[]);
+    setImportedFileName(null);
+    setQuery('');
+    setSelectedCategories([]);
+    setSelectedLanguages([]);
+    setSelectedList(null);
+    setSortBy('relevance');
+  }, []);
+
   const hasActiveFilters = selectedCategories.length > 0 || selectedLanguages.length > 0 || Boolean(selectedList);
 
   return (
@@ -112,6 +137,10 @@ export default function App() {
         totalCount={repos.length}
         filteredCount={filteredAndSortedRepos.length}
         datasetOwner={datasetOwner}
+        isImported={isImported}
+        importedFileName={importedFileName ?? undefined}
+        onOpenImport={() => setIsImportModalOpen(true)}
+        onResetToDefault={isImported ? handleResetToDefault : undefined}
       />
 
       <main className="flex-1 max-w-7xl mx-auto w-full px-3.5 sm:px-8 py-4 sm:py-6 space-y-3.5 sm:space-y-4">
@@ -191,6 +220,16 @@ export default function App() {
           </a>
         </p>
       </footer>
+
+      <ImportModal
+        isOpen={isImportModalOpen}
+        onClose={() => setIsImportModalOpen(false)}
+        onImport={handleImport}
+        isImported={isImported}
+        importedFileName={importedFileName ?? undefined}
+        onResetToDefault={handleResetToDefault}
+        defaultRepoCount={(staticRepos as Repository[]).length}
+      />
     </div>
   );
 }
