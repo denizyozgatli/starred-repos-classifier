@@ -1,5 +1,46 @@
-import { defineConfig } from 'vite';
+import { defineConfig, type Plugin } from 'vite';
 import react from '@vitejs/plugin-react';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+function staticDataPlugin(): Plugin {
+  let isSsrBuild = false;
+
+  return {
+    name: 'static-data-plugin',
+    configResolved(config) {
+      isSsrBuild = Boolean(config.build?.ssr);
+    },
+    configureServer(server) {
+      server.middlewares.use((req, res, next) => {
+        const url = req.url ? req.url.split('?')[0] : '';
+        if (url.endsWith('/data/repos.json')) {
+          const filePath = path.resolve(__dirname, 'data/repos.json');
+          if (fs.existsSync(filePath)) {
+            res.setHeader('Content-Type', 'application/json');
+            res.end(fs.readFileSync(filePath, 'utf-8'));
+            return;
+          }
+        }
+        next();
+      });
+    },
+    generateBundle() {
+      if (isSsrBuild) return;
+      const filePath = path.resolve(__dirname, 'data/repos.json');
+      if (fs.existsSync(filePath)) {
+        this.emitFile({
+          type: 'asset',
+          fileName: 'data/repos.json',
+          source: fs.readFileSync(filePath, 'utf-8'),
+        });
+      }
+    },
+  };
+}
 
 // Determine base path for portable deployment:
 // 1. Explicit BASE_PATH environment variable (e.g. root domain, Vercel, Netlify)
@@ -21,7 +62,7 @@ const getBasePath = (): string => {
 // https://vite.dev/config/
 export default defineConfig({
   base: getBasePath(),
-  plugins: [react()],
+  plugins: [react(), staticDataPlugin()],
   server: {
     port: 3000,
     open: false,

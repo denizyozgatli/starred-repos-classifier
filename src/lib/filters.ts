@@ -93,3 +93,58 @@ export function filterRepositories(
     return matchesCategory && matchesLanguage && matchesList;
   });
 }
+
+export interface ContextualFilterParams {
+  selectedCategories?: RepositoryCategory[];
+  selectedLanguages?: string[];
+  selectedList?: string | null;
+}
+
+/**
+ * Computes context-aware dynamic filter options for faceted navigation.
+ * For each facet (category, star list, language), peer active filters are applied,
+ * excluding the facet itself to avoid circular filtering while ensuring counts and
+ * available options accurately reflect the active context.
+ */
+export function computeContextualFilterOptions(
+  repos: Repository[],
+  params: ContextualFilterParams
+): DynamicFilterOptions {
+  const selectedCategories = params.selectedCategories || [];
+  const selectedLanguages = params.selectedLanguages || [];
+  const selectedList = params.selectedList ?? null;
+
+  if (selectedCategories.length === 0 && selectedLanguages.length === 0 && !selectedList) {
+    return extractFilterOptions(repos);
+  }
+
+  // 1. For Category facet: apply active Star List and Languages (exclude Category)
+  const reposForCategories = filterRepositories(
+    repos,
+    [],
+    selectedLanguages,
+    selectedList
+  );
+
+  // 2. For Star List facet: apply active Categories and Languages (exclude Star List)
+  const reposForLists = filterRepositories(
+    repos,
+    selectedCategories,
+    selectedLanguages,
+    null
+  );
+
+  // 3. For Language facet: apply active Categories and Star List (exclude Languages)
+  const reposForLanguages = filterRepositories(
+    repos,
+    selectedCategories,
+    [],
+    selectedList
+  );
+
+  return {
+    categories: extractFilterOptions(reposForCategories).categories,
+    lists: extractFilterOptions(reposForLists).lists,
+    languages: extractFilterOptions(reposForLanguages).languages,
+  };
+}

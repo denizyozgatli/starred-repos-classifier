@@ -1,11 +1,11 @@
 import { useState, useEffect, useMemo, useCallback } from 'react';
-import staticRepos from '../data/repos.json';
 import datasetMetadata from '../data/metadata.json';
 import type { Repository, RepositoryCategory, DatasetMetadata } from './types/repo.ts';
-import { extractFilterOptions, filterRepositories } from './lib/filters.ts';
+import { computeContextualFilterOptions, filterRepositories } from './lib/filters.ts';
 import { searchRepositories } from './lib/search.ts';
 import { sortRepositories, type SortOption } from './lib/sorting.ts';
 import { readStateFromUrl, syncStateToUrl } from './lib/urlState.ts';
+import { fetchDataset } from './lib/datasetLoader.ts';
 import { Header } from './components/Header.tsx';
 import { ImportModal } from './components/ImportModal.tsx';
 import { SearchBar } from './components/SearchBar.tsx';
@@ -18,15 +18,14 @@ const metadata = datasetMetadata as DatasetMetadata;
 const metaEnv = (import.meta as unknown as { env?: Record<string, string> }).env;
 const datasetOwner = metaEnv?.VITE_GITHUB_USERNAME?.trim() || metadata?.source?.username;
 
-
-
 export default function App() {
-  const [repos, setRepos] = useState<Repository[]>(staticRepos as Repository[]);
+  const [repos, setRepos] = useState<Repository[]>([]);
+  const [defaultRepos, setDefaultRepos] = useState<Repository[] | null>(null);
   const [importedFileName, setImportedFileName] = useState<string | null>(null);
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
 
-  const [loading] = useState<boolean>(false);
-  const [error] = useState<string | null>(null);
+  const [loading, setLoading] = useState<boolean>(true);
+  const [error, setError] = useState<string | null>(null);
 
   // Initialize state from URL params
   const [query, setQuery] = useState<string>('');
@@ -69,22 +68,25 @@ export default function App() {
     });
   }, [query, selectedCategories, selectedLanguages, selectedList, sortBy]);
 
-  // Extract dynamic filter options from dataset (no hardcoding)
+  // 1. Search base repositories (returns repos directly if query is empty)
+  const searchedRepos = useMemo(() => {
+    return searchRepositories(repos, query);
+  }, [repos, query]);
+
+  // 2. Extract contextual dynamic filter options (context-aware facets)
   const filterOptions = useMemo(() => {
-    return extractFilterOptions(repos);
-  }, [repos]);
+    return computeContextualFilterOptions(searchedRepos, {
+      selectedCategories,
+      selectedLanguages,
+      selectedList,
+    });
+  }, [searchedRepos, selectedCategories, selectedLanguages, selectedList]);
 
-  // Client-side search, filter, and sort pipeline
+  // 3. Client-side filter and sort pipeline
   const filteredAndSortedRepos = useMemo(() => {
-    // 1. Search
-    const searched = searchRepositories(repos, query);
-
-    // 2. Filter by category, language & star list
-    const filtered = filterRepositories(searched, selectedCategories, selectedLanguages, selectedList);
-
-    // 3. Sort
+    const filtered = filterRepositories(searchedRepos, selectedCategories, selectedLanguages, selectedList);
     return sortRepositories(filtered, sortBy);
-  }, [repos, query, selectedCategories, selectedLanguages, selectedList, sortBy]);
+  }, [searchedRepos, selectedCategories, selectedLanguages, selectedList, sortBy]);
 
   // Filter toggle handlers
   const handleToggleCategory = useCallback((category: RepositoryCategory) => {
@@ -99,6 +101,25 @@ export default function App() {
     );
   }, []);
 
+  // Fetch default dataset on mount
+  const loadDefaultDataset = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    const result = await fetchDataset();
+    if (result.success && result.data) {
+      setRepos(result.data);
+      setDefaultRepos(result.data);
+      setError(null);
+    } else {
+      setError(result.error || 'Failed to load repository dataset.');
+    }
+    setLoading(false);
+  }, []);
+
+  useEffect(() => {
+    loadDefaultDataset();
+  }, [loadDefaultDataset]);
+
   const handleResetFilters = useCallback(() => {
     setQuery('');
     setSelectedCategories([]);
@@ -112,6 +133,7 @@ export default function App() {
   const handleImport = useCallback((newRepos: Repository[], fileName: string) => {
     setRepos(newRepos);
     setImportedFileName(fileName);
+    setError(null);
     setQuery('');
     setSelectedCategories([]);
     setSelectedLanguages([]);
@@ -120,14 +142,20 @@ export default function App() {
   }, []);
 
   const handleResetToDefault = useCallback(() => {
-    setRepos(staticRepos as Repository[]);
-    setImportedFileName(null);
+    if (defaultRepos) {
+      setRepos(defaultRepos);
+      setImportedFileName(null);
+      setError(null);
+    } else {
+      loadDefaultDataset();
+      setImportedFileName(null);
+    }
     setQuery('');
     setSelectedCategories([]);
     setSelectedLanguages([]);
     setSelectedList(null);
     setSortBy('relevance');
-  }, []);
+  }, [defaultRepos, loadDefaultDataset]);
 
   const hasActiveFilters = selectedCategories.length > 0 || selectedLanguages.length > 0 || Boolean(selectedList);
 
@@ -188,7 +216,7 @@ export default function App() {
         {/* Main Content Area */}
         <section aria-label="Repositories" className="min-h-[300px]">
           {error ? (
-            <EmptyState type="error" message={error} onReset={handleResetFilters} />
+            <EmptyState type="error" message={error} onReset={loadDefaultDataset} />
           ) : loading ? (
             <div className="flex items-center justify-center py-20 text-github-muted">
               <div className="inline-flex items-center gap-2">
@@ -241,7 +269,7 @@ export default function App() {
         isImported={isImported}
         importedFileName={importedFileName ?? undefined}
         onResetToDefault={handleResetToDefault}
-        defaultRepoCount={(staticRepos as Repository[]).length}
+        defaultRepoCount={defaultRepos ? defaultRepos.length : repos.length}
       />
     </div>
   );

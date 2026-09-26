@@ -80,8 +80,8 @@ export const FilterBar: React.FC<FilterBarProps> = ({
         )}
       </div>
 
-      {/* Star List Pills (Only rendered when dataset contains Star Lists) */}
-      {filterOptions.lists && filterOptions.lists.length > 0 && (
+      {/* Star List Pills (Rendered when dataset contains Star Lists or a list is actively selected) */}
+      {((filterOptions.lists && filterOptions.lists.length > 0) || selectedList !== null) && (
         <div className="space-y-1">
           <div className="flex items-center justify-between">
             <span className="text-[11px] font-semibold uppercase tracking-wider text-github-muted inline-flex items-center gap-1">
@@ -139,7 +139,7 @@ export const FilterBar: React.FC<FilterBarProps> = ({
       )}
 
       {/* Category Pills (Horizontal scroll on mobile, wrap on desktop) */}
-      <div className={`space-y-1 ${filterOptions.lists && filterOptions.lists.length > 0 ? 'pt-1 border-t border-[#21262d]' : ''}`}>
+      <div className={`space-y-1 ${((filterOptions.lists && filterOptions.lists.length > 0) || selectedList !== null) ? 'pt-1 border-t border-[#21262d]' : ''}`}>
         <div className="flex items-center justify-between">
           <span className="text-[11px] font-semibold uppercase tracking-wider text-github-muted">
             Category

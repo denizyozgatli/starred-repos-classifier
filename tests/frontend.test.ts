@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import type { Repository } from '../src/types/repo.ts';
 import { searchRepositories } from '../src/lib/search.ts';
-import { extractFilterOptions, filterRepositories } from '../src/lib/filters.ts';
+import { extractFilterOptions, filterRepositories, computeContextualFilterOptions } from '../src/lib/filters.ts';
 import { sortRepositories } from '../src/lib/sorting.ts';
 import { stateToQueryString, readStateFromUrl, type DashboardState } from '../src/lib/urlState.ts';
 import { parseAndValidateDataset, validateDataset } from '../src/lib/datasetValidation.ts';
@@ -428,6 +428,266 @@ describe('Frontend Logic', () => {
       const resultInvalid = validateDataset(withInvalidLists as unknown as Repository[]);
       expect(resultInvalid.valid).toBe(false);
       expect(resultInvalid.error).toContain('must be an array of strings');
+    });
+  });
+
+  describe('Contextual Faceted Filtering (P3 Filter Bug Fix)', () => {
+    const FIXTURE_REPOS: Repository[] = [
+      {
+        id: 1,
+        name: 'agent-core',
+        fullName: 'org/agent-core',
+        owner: 'org',
+        description: 'Autonomous AI agent core engine',
+        topics: ['ai', 'agent'],
+        language: 'Python',
+        stars: 1000,
+        url: 'https://github.com/org/agent-core',
+        updatedAt: '2026-03-01T00:00:00Z',
+        category: 'ML / AI',
+        lists: ['AI Tools', 'Starred Favorites'],
+        classification: { method: 'rule', confidence: 0.99, classifiedAt: '2026-03-01T00:00:00Z', inputHash: 'h1' },
+      },
+      {
+        id: 2,
+        name: 'vision-llm',
+        fullName: 'org/vision-llm',
+        owner: 'org',
+        description: 'Multimodal vision model toolkit',
+        topics: ['vision', 'llm'],
+        language: 'Python',
+        stars: 800,
+        url: 'https://github.com/org/vision-llm',
+        updatedAt: '2026-03-02T00:00:00Z',
+        category: 'ML / AI',
+        lists: ['AI Tools'],
+        classification: { method: 'rule', confidence: 0.99, classifiedAt: '2026-03-02T00:00:00Z', inputHash: 'h2' },
+      },
+      {
+        id: 3,
+        name: 'cli-agent',
+        fullName: 'org/cli-agent',
+        owner: 'org',
+        description: 'Command line terminal agent tool',
+        topics: ['cli', 'tools'],
+        language: 'Go',
+        stars: 500,
+        url: 'https://github.com/org/cli-agent',
+        updatedAt: '2026-03-03T00:00:00Z',
+        category: 'CLI / Tools',
+        lists: ['AI Tools'],
+        classification: { method: 'rule', confidence: 0.95, classifiedAt: '2026-03-03T00:00:00Z', inputHash: 'h3' },
+      },
+      {
+        id: 4,
+        name: 'react-ui',
+        fullName: 'org/react-ui',
+        owner: 'org',
+        description: 'React design system and components',
+        topics: ['react', 'ui'],
+        language: 'TypeScript',
+        stars: 1200,
+        url: 'https://github.com/org/react-ui',
+        updatedAt: '2026-03-04T00:00:00Z',
+        category: 'Web Frontend',
+        lists: ['Web Stack'],
+        classification: { method: 'rule', confidence: 0.98, classifiedAt: '2026-03-04T00:00:00Z', inputHash: 'h4' },
+      },
+      {
+        id: 5,
+        name: 'api-gateway',
+        fullName: 'org/api-gateway',
+        owner: 'org',
+        description: 'High performance API gateway proxy',
+        topics: ['api', 'gateway'],
+        language: 'Go',
+        stars: 600,
+        url: 'https://github.com/org/api-gateway',
+        updatedAt: '2026-03-05T00:00:00Z',
+        category: 'Backend / API',
+        lists: [],
+        classification: { method: 'rule', confidence: 0.98, classifiedAt: '2026-03-05T00:00:00Z', inputHash: 'h5' },
+      },
+    ];
+
+    it('1. No filters: Category and Star List counts represent complete dataset', () => {
+      const facets = computeContextualFilterOptions(FIXTURE_REPOS, {});
+
+      // Category counts: ML / AI (2), CLI / Tools (1), Web Frontend (1), Backend / API (1)
+      const catMap = Object.fromEntries(facets.categories.map(c => [c.value, c.count]));
+      expect(catMap).toEqual({
+        'ML / AI': 2,
+        'CLI / Tools': 1,
+        'Web Frontend': 1,
+        'Backend / API': 1,
+      });
+
+      // Star List counts: AI Tools (3), Starred Favorites (1), Web Stack (1)
+      const listMap = Object.fromEntries(facets.lists.map(l => [l.value, l.count]));
+      expect(listMap).toEqual({
+        'AI Tools': 3,
+        'Starred Favorites': 1,
+        'Web Stack': 1,
+      });
+
+      // Language counts: Python (2), Go (2), TypeScript (1)
+      const langMap = Object.fromEntries(facets.languages.map(l => [l.value, l.count]));
+      expect(langMap).toEqual({
+        'Python': 2,
+        'Go': 2,
+        'TypeScript': 1,
+      });
+    });
+
+    it('2. Star List selected: Category counts calculated only from repositories in that Star List', () => {
+      const facets = computeContextualFilterOptions(FIXTURE_REPOS, { selectedList: 'AI Tools' });
+
+      // Categories present in 'AI Tools': ML / AI (2), CLI / Tools (1)
+      const catMap = Object.fromEntries(facets.categories.map(c => [c.value, c.count]));
+      expect(catMap).toEqual({
+        'ML / AI': 2,
+        'CLI / Tools': 1,
+      });
+
+      // Categories with zero matching repos ('Web Frontend', 'Backend / API') are absent
+      expect(facets.categories.some(c => c.value === 'Web Frontend')).toBe(false);
+      expect(facets.categories.some(c => c.value === 'Backend / API')).toBe(false);
+
+      // Selecting any displayed category produces non-zero results matching the displayed count
+      for (const cat of facets.categories) {
+        const matches = filterRepositories(FIXTURE_REPOS, [cat.value], [], 'AI Tools');
+        expect(matches.length).toBe(cat.count);
+        expect(matches.length).toBeGreaterThan(0);
+      }
+    });
+
+    it('3. Category selected: Star List counts calculated only from repositories in that Category', () => {
+      const facets = computeContextualFilterOptions(FIXTURE_REPOS, { selectedCategories: ['ML / AI'] });
+
+      // Star Lists present in 'ML / AI': AI Tools (2), Starred Favorites (1)
+      const listMap = Object.fromEntries(facets.lists.map(l => [l.value, l.count]));
+      expect(listMap).toEqual({
+        'AI Tools': 2,
+        'Starred Favorites': 1,
+      });
+
+      // Lists with zero matching repos ('Web Stack') are absent
+      expect(facets.lists.some(l => l.value === 'Web Stack')).toBe(false);
+
+      // Selecting any displayed list produces non-zero results matching the displayed count
+      for (const list of facets.lists) {
+        const matches = filterRepositories(FIXTURE_REPOS, ['ML / AI'], [], list.value);
+        expect(matches.length).toBe(list.count);
+        expect(matches.length).toBeGreaterThan(0);
+      }
+    });
+
+    it('4. Star List + Category: result set is intersection and counts remain consistent', () => {
+      const filtered = filterRepositories(FIXTURE_REPOS, ['ML / AI'], [], 'AI Tools');
+      expect(filtered).toHaveLength(2);
+      expect(filtered.map(r => r.name)).toEqual(['agent-core', 'vision-llm']);
+
+      const facets = computeContextualFilterOptions(FIXTURE_REPOS, {
+        selectedList: 'AI Tools',
+        selectedCategories: ['ML / AI'],
+      });
+
+      // In the context of 'AI Tools', Category facet shows available categories within 'AI Tools'
+      const catMap = Object.fromEntries(facets.categories.map(c => [c.value, c.count]));
+      expect(catMap).toEqual({
+        'ML / AI': 2,
+        'CLI / Tools': 1,
+      });
+
+      // In the context of 'ML / AI', Star List facet shows available lists within 'ML / AI'
+      const listMap = Object.fromEntries(facets.lists.map(l => [l.value, l.count]));
+      expect(listMap).toEqual({
+        'AI Tools': 2,
+        'Starred Favorites': 1,
+      });
+    });
+
+    it('5. Search + Star List: search semantics preserved in contextual counts and results', () => {
+      const searched = searchRepositories(FIXTURE_REPOS, 'agent');
+      expect(searched.map(r => r.name)).toEqual(expect.arrayContaining(['agent-core', 'cli-agent']));
+
+      const facets = computeContextualFilterOptions(searched, { selectedList: 'AI Tools' });
+      const catMap = Object.fromEntries(facets.categories.map(c => [c.value, c.count]));
+      expect(catMap).toEqual({
+        'ML / AI': 1,
+        'CLI / Tools': 1,
+      });
+
+      const filtered = filterRepositories(searched, [], [], 'AI Tools');
+      expect(filtered).toHaveLength(2);
+      expect(filtered.map(r => r.name)).toEqual(expect.arrayContaining(['agent-core', 'cli-agent']));
+    });
+
+    it('6. Search + Category: search semantics preserved in contextual counts and results', () => {
+      const searched = searchRepositories(FIXTURE_REPOS, 'agent');
+      const facets = computeContextualFilterOptions(searched, { selectedCategories: ['ML / AI'] });
+
+      // In searched repos matching 'ML / AI', only agent-core matches
+      const listMap = Object.fromEntries(facets.lists.map(l => [l.value, l.count]));
+      expect(listMap).toEqual({
+        'AI Tools': 1,
+        'Starred Favorites': 1,
+      });
+
+      const filtered = filterRepositories(searched, ['ML / AI'], []);
+      expect(filtered).toHaveLength(1);
+      expect(filtered[0].name).toBe('agent-core');
+    });
+
+    it('7. URL state: serializes and restores category and list parameters', () => {
+      const state: DashboardState = {
+        query: 'agent',
+        categories: ['ML / AI'],
+        languages: ['Python'],
+        sortBy: 'stars',
+        list: 'AI Tools',
+      };
+
+      const queryString = stateToQueryString(state);
+      expect(queryString).toContain('category=ML+%2F+AI');
+      expect(queryString).toContain('list=AI+Tools');
+
+      // Emulate URLSearchParams parse
+      const params = new URLSearchParams(queryString.slice(1));
+      expect(params.get('category')).toBe('ML / AI');
+      expect(params.get('list')).toBe('AI Tools');
+    });
+
+    it('8. Reset: clearing active filters restores full dataset facet counts', () => {
+      // Filtered state
+      const filteredFacets = computeContextualFilterOptions(FIXTURE_REPOS, { selectedList: 'AI Tools' });
+      expect(filteredFacets.categories).toHaveLength(2);
+
+      // Reset state (all filter params empty/null)
+      const resetFacets = computeContextualFilterOptions(FIXTURE_REPOS, {
+        selectedCategories: [],
+        selectedLanguages: [],
+        selectedList: null,
+      });
+
+      expect(resetFacets.categories).toHaveLength(4);
+      expect(resetFacets.lists).toHaveLength(3);
+    });
+
+    it('9. Empty intersection: gracefully handles zero-result combinations from external URLs', () => {
+      // Incompatible combination: 'Web Stack' (only react-ui in Web Frontend) + 'ML / AI'
+      const filtered = filterRepositories(FIXTURE_REPOS, ['ML / AI'], [], 'Web Stack');
+      expect(filtered).toHaveLength(0);
+
+      const facets = computeContextualFilterOptions(FIXTURE_REPOS, {
+        selectedList: 'Web Stack',
+        selectedCategories: ['ML / AI'],
+      });
+
+      // Categories within 'Web Stack'
+      expect(facets.categories.map(c => c.value)).toEqual(['Web Frontend']);
+      // Lists within 'ML / AI'
+      expect(facets.lists.map(l => l.value)).toEqual(expect.arrayContaining(['AI Tools', 'Starred Favorites']));
     });
   });
 });
