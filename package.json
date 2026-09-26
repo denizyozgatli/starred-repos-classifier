@@ -3,9 +3,19 @@
   "version": "1.0.0",
   "type": "module",
   "description": "Fast, minimal, personal web dashboard for GitHub starred repositories with hybrid classification",
+  "bin": {
+    "star-classifier": "./bin/cli.js"
+  },
+  "files": [
+    "dist",
+    "bin",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
     "dev": "vite",
-    "build": "tsc && vite build",
+    "build": "tsc && vite build && vite build --ssr bin/cli.ts --outDir dist/bin",
+    "cli": "tsx bin/cli.ts",
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
@@ -17,19 +27,19 @@
     "evaluate:unseen": "tsx scripts/evaluate-unseen.ts"
   },
   "dependencies": {
+    "@google/genai": "^0.3.0",
+    "dotenv": "^16.4.7",
     "fuse.js": "^7.1.0",
     "lucide-react": "^1.16.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
   },
   "devDependencies": {
-    "@google/genai": "^0.3.0",
     "@types/node": "^22.13.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "@vitejs/plugin-react": "^4.3.4",
     "autoprefixer": "^10.4.20",
-    "dotenv": "^16.4.7",
     "postcss": "^8.5.1",
     "tailwindcss": "^3.4.17",
     "tsx": "^4.19.2",

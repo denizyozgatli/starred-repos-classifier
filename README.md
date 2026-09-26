@@ -169,6 +169,40 @@ Every repository is classified into exactly one primary category from the follow
 
 ---
 
+## Standalone CLI (`star-classifier`)
+
+You can generate a categorized dataset for any GitHub account directly from your terminal and load it into the web dashboard:
+
+```bash
+# Fetch and classify any public user's starred repositories:
+npx star-classifier --user <github-username>
+
+# Or fetch your own stars (including private Star Lists):
+npx star-classifier --token <github-token>
+```
+
+### CLI Features & Capabilities
+
+- **Direct Web Import**: Generates `./repos.json` by default (or custom path via `-o my-stars.json`). Simply open the [web dashboard](https://denizyozgatli.github.io/starred-repos-classifier/), click **Import JSON** in the top navigation, and drag-and-drop the file.
+- **GitHub Star Lists**: Providing a GitHub token (`--token` or `GITHUB_TOKEN` environment variable) automatically retrieves your curated Star Lists via GitHub's GraphQL API. When running without a token on public users, Star Lists are cleanly omitted (`lists: []`).
+- **Deterministic Rules & Gemini**: By default, repositories are classified using fast deterministic rules. Ambiguous repositories can leverage Gemini if you supply a Gemini key (`--gemini-key` or `GEMINI_API_KEY`). You can also force rule-only mode with `--rule-only`.
+- **Safe & Isolated**: The CLI runs with an isolated cache (`./.star-classifier-cache.json`) and never mutates repository source data or manual overrides.
+
+### Common Examples
+
+```bash
+# Public user stars (fast, rule-based, custom output):
+npx star-classifier --user torvalds -o torvalds-repos.json --rule-only
+
+# Authenticated user stars with Star Lists and Gemini fallback:
+npx star-classifier --token ghp_yourToken --gemini-key yourGeminiKey
+
+# In local clone development:
+npm run cli -- --user octocat
+```
+
+---
+
 ## Local Development
 
 ### Prerequisites
