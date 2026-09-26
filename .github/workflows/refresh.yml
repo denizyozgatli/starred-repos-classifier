@@ -1,6 +1,9 @@
 name: Refresh and Deploy Starred Repositories
 
 on:
+  push:
+    branches:
+      - master
   schedule:
     # Daily at midnight UTC
     - cron: '0 0 * * *'
@@ -36,6 +39,7 @@ jobs:
         run: npm ci
 
       - name: Run data pipeline (fetch, classify, overrides, validate)
+        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
         env:
           GITHUB_TOKEN: ${{ secrets.PAT_GITHUB_TOKEN || secrets.GITHUB_TOKEN }}
           GITHUB_USERNAME: ${{ vars.GITHUB_USERNAME || secrets.GITHUB_USERNAME || '' }}
@@ -52,6 +56,7 @@ jobs:
         run: npm run build
 
       - name: Commit and push changes if updated
+        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
         run: |
           BRANCH="${{ github.ref_name }}"
           # Ensure git has the latest remote state
