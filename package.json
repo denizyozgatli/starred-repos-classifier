@@ -2,13 +2,37 @@
   "name": "starred-repos-classifier",
   "version": "1.0.0",
   "type": "module",
-  "description": "Fast, minimal, personal web dashboard for GitHub starred repositories with hybrid classification",
+  "description": "Fast, minimal personal & self-hosted web catalog and standalone CLI to fetch, classify, and filter GitHub starred repositories with hybrid rules and Gemini LLM",
+  "author": "Deniz Yozgatlı",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/denizyozgatli/starred-repos-classifier.git"
+  },
+  "homepage": "https://github.com/denizyozgatli/starred-repos-classifier#readme",
+  "bugs": {
+    "url": "https://github.com/denizyozgatli/starred-repos-classifier/issues"
+  },
+  "keywords": [
+    "github",
+    "starred-repositories",
+    "stars",
+    "classifier",
+    "cli",
+    "gemini",
+    "developer-tools",
+    "dashboard",
+    "star-lists"
+  ],
+  "engines": {
+    "node": ">=18.11.0"
+  },
   "bin": {
     "star-classifier": "./bin/cli.js"
   },
   "files": [
-    "dist",
-    "bin",
+    "bin/cli.js",
+    "dist/bin/cli.js",
     "README.md",
     "LICENSE"
   ],
@@ -28,11 +52,7 @@
   },
   "dependencies": {
     "@google/genai": "^0.3.0",
-    "dotenv": "^16.4.7",
-    "fuse.js": "^7.1.0",
-    "lucide-react": "^1.16.0",
-    "react": "^19.0.0",
-    "react-dom": "^19.0.0"
+    "dotenv": "^16.4.7"
   },
   "devDependencies": {
     "@types/node": "^22.13.0",
@@ -40,7 +60,11 @@
     "@types/react-dom": "^19.0.0",
     "@vitejs/plugin-react": "^4.3.4",
     "autoprefixer": "^10.4.20",
+    "fuse.js": "^7.1.0",
+    "lucide-react": "^1.16.0",
     "postcss": "^8.5.1",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
     "tailwindcss": "^3.4.17",
     "tsx": "^4.19.2",
     "typescript": "^5.7.3",

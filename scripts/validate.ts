@@ -3,12 +3,18 @@ import { resolve } from 'node:path';
 import { validateRepos } from './lib/validator.ts';
 
 function main() {
-  const filePath = resolve(process.cwd(), 'data', 'repos.json');
+  const customPath = process.argv[2];
+  const filePath = customPath ? resolve(process.cwd(), customPath) : resolve(process.cwd(), 'data', 'repos.json');
   console.log(`[validate] Checking dataset at ${filePath}...`);
 
   if (!existsSync(filePath)) {
-    console.error(`[validate] ERROR: ${filePath} does not exist.`);
-    process.exit(1);
+    if (customPath) {
+      console.error(`[validate] ERROR: Specified dataset file ${filePath} does not exist.`);
+      process.exit(1);
+    }
+    console.log(`[validate] Notice: No default dataset found at ${filePath}.`);
+    console.log('[validate] Skipping validation. To validate a dataset, provide its path: npm run pipeline:validate -- <path-to-json>');
+    process.exit(0);
   }
 
   let repos: unknown;

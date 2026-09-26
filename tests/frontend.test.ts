@@ -834,4 +834,67 @@ describe('Frontend Logic', () => {
       expect(futureResult.errors[0].message).toContain('Unsupported dataset schema version (99)');
     });
   });
+
+  describe('Decoupled Architecture & Empty Initial State Support', () => {
+    it('gracefully handles empty initial dataset in search, filtering, and sorting pipelines', () => {
+      const emptyRepos: Repository[] = [];
+
+      // 1. Search returns empty
+      const searchResult = searchRepositories(emptyRepos, 'react');
+      expect(searchResult).toEqual([]);
+
+      // 2. Filter options on empty repos
+      const options = computeContextualFilterOptions(emptyRepos, {
+        selectedCategories: [],
+        selectedLanguages: [],
+        selectedList: null,
+      });
+      expect(options.categories).toEqual([]);
+      expect(options.languages).toEqual([]);
+      expect(options.lists).toEqual([]);
+
+      // 3. Filter on empty repos
+      const filtered = filterRepositories(emptyRepos, ['Web Frontend'], ['TypeScript'], null);
+      expect(filtered).toEqual([]);
+
+      // 4. Sort on empty repos
+      const sorted = sortRepositories(emptyRepos, 'stars');
+      expect(sorted).toEqual([]);
+    });
+
+    it('extracts metadata correctly when importing a user-provided dataset envelope', () => {
+      const userEnvelope: DatasetEnvelope = {
+        schemaVersion: 1,
+        username: 'alice-developer',
+        generatedAt: '2026-09-26T15:00:00.000Z',
+        source: {
+          type: 'github-stars',
+          username: 'alice-developer',
+        },
+        repos: SAMPLE_REPOS,
+      };
+
+      const result = parseAndValidateDataset(JSON.stringify(userEnvelope));
+      expect(result.valid).toBe(true);
+      expect(result.data).toHaveLength(SAMPLE_REPOS.length);
+      expect(result.metadata?.schemaVersion).toBe(1);
+      expect(result.metadata?.username).toBe('alice-developer');
+      expect(result.metadata?.generatedAt).toBe('2026-09-26T15:00:00.000Z');
+      expect(result.metadata?.source?.type).toBe('github-stars');
+      expect(result.metadata?.source?.username).toBe('alice-developer');
+    });
+
+    it('validates an imported empty dataset envelope for empty state display', () => {
+      const emptyUserEnvelope: DatasetEnvelope = {
+        schemaVersion: 1,
+        username: 'newbie-coder',
+        repos: [],
+      };
+
+      const result = parseAndValidateDataset(JSON.stringify(emptyUserEnvelope));
+      expect(result.valid).toBe(true);
+      expect(result.data).toEqual([]);
+      expect(result.metadata?.username).toBe('newbie-coder');
+    });
+  });
 });

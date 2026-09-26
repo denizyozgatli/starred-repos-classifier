@@ -1,16 +1,13 @@
-name: Refresh and Deploy Starred Repositories
+name: Build and Deploy
 
 on:
   push:
     branches:
       - master
-  schedule:
-    # Daily at midnight UTC
-    - cron: '0 0 * * *'
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
   pages: write
   id-token: write
 
@@ -19,15 +16,12 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  refresh-and-build:
+  build-and-test:
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-        with:
-          ref: ${{ github.ref_name }}
-          fetch-depth: 0
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -38,14 +32,6 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Run data pipeline (fetch, classify, overrides, validate)
-        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
-        env:
-          GITHUB_TOKEN: ${{ secrets.PAT_GITHUB_TOKEN || secrets.GITHUB_TOKEN }}
-          GITHUB_USERNAME: ${{ vars.GITHUB_USERNAME || secrets.GITHUB_USERNAME || '' }}
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-        run: npm run pipeline:run
-
       - name: Validate dataset
         run: npm run pipeline:validate
 
@@ -55,46 +41,13 @@ jobs:
       - name: Build static site
         run: npm run build
 
-      - name: Commit and push changes if updated
-        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
-        run: |
-          BRANCH="${{ github.ref_name }}"
-          # Ensure git has the latest remote state
-          git fetch origin "$BRANCH"
-
-          # Stash newly generated repos.json and metadata.json in a temporary location outside git
-          TEMP_DIR="$(mktemp -d)"
-          cp data/repos.json "$TEMP_DIR/repos.json"
-          [ -f data/metadata.json ] && cp data/metadata.json "$TEMP_DIR/metadata.json"
-
-          # Synchronize local branch to latest origin/$BRANCH
-          git checkout -B "$BRANCH" origin/"$BRANCH"
-
-          # Restore newly generated files
-          cp "$TEMP_DIR/repos.json" data/repos.json
-          [ -f "$TEMP_DIR/metadata.json" ] && cp "$TEMP_DIR/metadata.json" data/metadata.json
-          rm -rf "$TEMP_DIR"
-
-          # Check if dataset files have changes against latest origin/$BRANCH
-          if git diff --exit-code data/repos.json data/metadata.json > /dev/null 2>&1; then
-            echo "No changes detected in dataset against origin/$BRANCH."
-          else
-            echo "Changes detected in dataset. Committing and pushing..."
-            git config --local user.email "github-actions[bot]@users.noreply.github.com"
-            git config --local user.name "github-actions[bot]"
-            git add data/repos.json
-            [ -f data/metadata.json ] && git add data/metadata.json
-            git commit -m "chore(data): refresh starred repositories dataset [skip ci]"
-            git push origin "$BRANCH"
-          fi
-
       - name: Upload GitHub Pages artifact
         uses: actions/upload-pages-artifact@v3
         with:
           path: './dist'
 
   deploy:
-    needs: refresh-and-build
+    needs: build-and-test
     runs-on: ubuntu-latest
     environment:
       name: github-pages

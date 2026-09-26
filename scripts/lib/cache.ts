@@ -36,7 +36,7 @@ export function computeInputHash(repo: {
 
 /**
  * Loads classification cache.
- * Authoritative existing dataset classifications from data/repos.json take precedence over
+ * Authoritative existing dataset classifications (when a seed dataset is provided) take precedence over
  * transient local cache entries in data/.cache.json.
  * data/.cache.json is only used to backfill entries not present in the authoritative dataset.
  * Fallback classifications are NEVER included in the cache.
@@ -45,9 +45,8 @@ export function loadCache(customPath?: string, seedReposPath?: string | null): C
   const filePath = customPath || CACHE_PATH;
   const cache: ClassificationCache = {};
 
-  // 1. Seed authoritative classifications from data/repos.json FIRST:
-  // Only seed when seedReposPath is explicitly provided, or when customPath is omitted (production pipeline).
-  const shouldSeed = seedReposPath !== null && (seedReposPath !== undefined || customPath === undefined);
+  // 1. Seed authoritative classifications from seed dataset if provided and exists:
+  const shouldSeed = seedReposPath !== null && (seedReposPath !== undefined || (customPath === undefined && existsSync(DEFAULT_REPOS_PATH)));
   const seedFile = shouldSeed ? (seedReposPath || DEFAULT_REPOS_PATH) : null;
   if (seedFile && existsSync(seedFile)) {
     try {

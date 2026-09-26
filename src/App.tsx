@@ -1,11 +1,10 @@
 import { useState, useEffect, useMemo, useCallback } from 'react';
-import datasetMetadata from '../data/metadata.json';
-import type { Repository, RepositoryCategory, DatasetMetadata } from './types/repo.ts';
+import type { Repository, RepositoryCategory } from './types/repo.ts';
+import type { DatasetValidationResult } from './lib/datasetValidation.ts';
 import { computeContextualFilterOptions, filterRepositories } from './lib/filters.ts';
 import { searchRepositories } from './lib/search.ts';
 import { sortRepositories, type SortOption } from './lib/sorting.ts';
 import { readStateFromUrl, syncStateToUrl } from './lib/urlState.ts';
-import { fetchDataset } from './lib/datasetLoader.ts';
 import { Header } from './components/Header.tsx';
 import { ImportModal } from './components/ImportModal.tsx';
 import { SearchBar } from './components/SearchBar.tsx';
@@ -14,18 +13,16 @@ import { SortSelector } from './components/SortSelector.tsx';
 import { RepoGrid } from './components/RepoGrid.tsx';
 import { EmptyState } from './components/EmptyState.tsx';
 
-const metadata = datasetMetadata as DatasetMetadata;
 const metaEnv = (import.meta as unknown as { env?: Record<string, string> }).env;
-const datasetOwner = metaEnv?.VITE_GITHUB_USERNAME?.trim() || metadata?.source?.username;
 
 export default function App() {
   const [repos, setRepos] = useState<Repository[]>([]);
-  const [defaultRepos, setDefaultRepos] = useState<Repository[] | null>(null);
   const [importedFileName, setImportedFileName] = useState<string | null>(null);
+  const [importedMetadata, setImportedMetadata] = useState<DatasetValidationResult['metadata'] | null>(null);
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
-
-  const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
+
+  const datasetOwner = metaEnv?.VITE_GITHUB_USERNAME?.trim() || importedMetadata?.username;
 
   // Initialize state from URL params
   const [query, setQuery] = useState<string>('');
@@ -101,25 +98,6 @@ export default function App() {
     );
   }, []);
 
-  // Fetch default dataset on mount
-  const loadDefaultDataset = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    const result = await fetchDataset();
-    if (result.success && result.data) {
-      setRepos(result.data);
-      setDefaultRepos(result.data);
-      setError(null);
-    } else {
-      setError(result.error || 'Failed to load repository dataset.');
-    }
-    setLoading(false);
-  }, []);
-
-  useEffect(() => {
-    loadDefaultDataset();
-  }, [loadDefaultDataset]);
-
   const handleResetFilters = useCallback(() => {
     setQuery('');
     setSelectedCategories([]);
@@ -130,9 +108,25 @@ export default function App() {
 
   const isImported = importedFileName !== null;
 
-  const handleImport = useCallback((newRepos: Repository[], fileName: string) => {
-    setRepos(newRepos);
-    setImportedFileName(fileName);
+  const handleImport = useCallback(
+    (newRepos: Repository[], fileName: string, metadata?: DatasetValidationResult['metadata']) => {
+      setRepos(newRepos);
+      setImportedFileName(fileName);
+      setImportedMetadata(metadata || null);
+      setError(null);
+      setQuery('');
+      setSelectedCategories([]);
+      setSelectedLanguages([]);
+      setSelectedList(null);
+      setSortBy('relevance');
+    },
+    []
+  );
+
+  const handleResetToDefault = useCallback(() => {
+    setRepos([]);
+    setImportedFileName(null);
+    setImportedMetadata(null);
     setError(null);
     setQuery('');
     setSelectedCategories([]);
@@ -140,22 +134,6 @@ export default function App() {
     setSelectedList(null);
     setSortBy('relevance');
   }, []);
-
-  const handleResetToDefault = useCallback(() => {
-    if (defaultRepos) {
-      setRepos(defaultRepos);
-      setImportedFileName(null);
-      setError(null);
-    } else {
-      loadDefaultDataset();
-      setImportedFileName(null);
-    }
-    setQuery('');
-    setSelectedCategories([]);
-    setSelectedLanguages([]);
-    setSelectedList(null);
-    setSortBy('relevance');
-  }, [defaultRepos, loadDefaultDataset]);
 
   const hasActiveFilters = selectedCategories.length > 0 || selectedLanguages.length > 0 || Boolean(selectedList);
 
@@ -216,16 +194,13 @@ export default function App() {
         {/* Main Content Area */}
         <section aria-label="Repositories" className="min-h-[300px]">
           {error ? (
-            <EmptyState type="error" message={error} onReset={loadDefaultDataset} />
-          ) : loading ? (
-            <div className="flex items-center justify-center py-20 text-github-muted">
-              <div className="inline-flex items-center gap-2">
-                <span className="w-4 h-4 border-2 border-[#58a6ff] border-t-transparent rounded-full animate-spin" />
-                <span>Loading repositories...</span>
-              </div>
-            </div>
+            <EmptyState type="error" message={error} onReset={() => setError(null)} />
           ) : repos.length === 0 ? (
-            <EmptyState type="empty" />
+            isImported ? (
+              <EmptyState type="empty" />
+            ) : (
+              <EmptyState type="initial" onOpenImport={() => setIsImportModalOpen(true)} />
+            )
           ) : filteredAndSortedRepos.length === 0 ? (
             <EmptyState
               type="search"
@@ -269,7 +244,7 @@ export default function App() {
         isImported={isImported}
         importedFileName={importedFileName ?? undefined}
         onResetToDefault={handleResetToDefault}
-        defaultRepoCount={defaultRepos ? defaultRepos.length : repos.length}
+        defaultRepoCount={0}
       />
     </div>
   );

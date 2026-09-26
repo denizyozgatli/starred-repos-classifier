@@ -27,11 +27,16 @@ dist-ssr
 .env.*
 !.env.example
 
-# Local data cache and generated overrides (if temporary)
-# Note: data/repos.json and data/overrides.json are tracked or generated
+# Local data cache, backup, and local dataset (not committed)
+data/repos.json
 data/.cache.json
 data/repos.backup.json
 data/*.tmp.json
 
 # Local scripts
 powershell.bat
+
+# Local CLI output, cache, and scratch test artifacts
+repos.json
+.star-classifier-cache.json
+scratch/
