@@ -165,6 +165,13 @@ export async function executeDatasetPipeline(options: PipelineOptions): Promise<
         });
         if (isIdentical) {
           isUnchanged = true;
+          if (Array.isArray(parsed)) {
+            const envelope = buildDatasetEnvelope(finalRepos, {
+              username: activeUser,
+            });
+            atomicWriteJson(outputPath, envelope);
+            logger.log('[pipeline] Upgraded legacy dataset file to envelope format');
+          }
         }
       }
     } catch {

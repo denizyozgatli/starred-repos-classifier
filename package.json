@@ -27,18 +27,13 @@
   "engines": {
     "node": ">=18.11.0"
   },
-  "bin": {
-    "star-classifier": "./bin/cli.js"
-  },
   "files": [
-    "bin/cli.js",
-    "dist/bin/cli.js",
     "README.md",
     "LICENSE"
   ],
   "scripts": {
     "dev": "vite",
-    "build": "tsc && vite build && vite build --ssr bin/cli.ts --outDir dist/bin",
+    "build": "tsc && vite build",
     "cli": "tsx bin/cli.ts",
     "preview": "vite preview",
     "test": "vitest run",

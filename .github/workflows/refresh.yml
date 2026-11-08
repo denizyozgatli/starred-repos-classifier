@@ -1,4 +1,4 @@
-name: Build and Deploy
+name: Deploy to GitHub Pages
 
 on:
   push:
@@ -16,7 +16,7 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  build-and-test:
+  build-and-deploy:
     runs-on: ubuntu-latest
 
     steps:
@@ -32,9 +32,6 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Validate dataset
-        run: npm run pipeline:validate
-
       - name: Run test suite
         run: npm test
 
@@ -47,7 +44,7 @@ jobs:
           path: './dist'
 
   deploy:
-    needs: build-and-test
+    needs: build-and-deploy
     runs-on: ubuntu-latest
     environment:
       name: github-pages

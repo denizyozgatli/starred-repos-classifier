@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { existsSync, unlinkSync, writeFileSync, mkdirSync } from 'node:fs';
+import { existsSync, unlinkSync, writeFileSync, mkdirSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { classifyRepos } from '../src/core/classify-repos.ts';
@@ -283,16 +283,24 @@ describe('Pipeline CheckUnchanged with Bare Array and Envelope Formats', () => {
     const fetchSpy = vi.spyOn(githubMod, 'fetchAllStarredRepos').mockResolvedValue(mockRepos);
 
     try {
+      const logs: string[] = [];
       const result = await executeDatasetPipeline({
         username: 'org',
         outputPath: testOutput,
         checkUnchanged: true,
         noCache: true,
         ruleOnly: true,
-        logger: { log: () => {}, warn: () => {}, error: () => {} },
+        logger: { log: (msg: string) => logs.push(msg), warn: () => {}, error: () => {} },
       });
 
       expect(result.unchanged).toBe(true);
+      expect(logs).toContain('[pipeline] Upgraded legacy dataset file to envelope format');
+
+      // Verify file was rewritten as envelope
+      const rewritten = JSON.parse(readFileSync(testOutput, 'utf-8'));
+      expect(rewritten.schemaVersion).toBe(1);
+      expect(Array.isArray(rewritten.repos)).toBe(true);
+      expect(rewritten.repos.length).toBe(1);
     } finally {
       fetchSpy.mockRestore();
     }
@@ -323,16 +331,22 @@ describe('Pipeline CheckUnchanged with Bare Array and Envelope Formats', () => {
     const fetchSpy = vi.spyOn(githubMod, 'fetchAllStarredRepos').mockResolvedValue(mockRepos);
 
     try {
+      const logs: string[] = [];
       const result = await executeDatasetPipeline({
         username: 'org',
         outputPath: testOutput,
         checkUnchanged: true,
         noCache: true,
         ruleOnly: true,
-        logger: { log: () => {}, warn: () => {}, error: () => {} },
+        logger: { log: (msg: string) => logs.push(msg), warn: () => {}, error: () => {} },
       });
 
       expect(result.unchanged).toBe(true);
+      expect(logs).not.toContain('[pipeline] Upgraded legacy dataset file to envelope format');
+
+      // Verify file was NOT rewritten and generatedAt remains the original 2020 timestamp
+      const notRewritten = JSON.parse(readFileSync(testOutput, 'utf-8'));
+      expect(notRewritten.generatedAt).toBe('2020-01-01T00:00:00Z');
     } finally {
       fetchSpy.mockRestore();
     }

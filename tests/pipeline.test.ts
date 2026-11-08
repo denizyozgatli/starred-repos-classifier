@@ -11,6 +11,7 @@ import { fetchAllStarredRepos, GitHubApiError, parseUsernameFromArgs, resolveAct
 import { atomicWriteJson, withDatasetSafety } from '../scripts/lib/storage.ts';
 import { runClassification } from '../scripts/classify.ts';
 import { mergeStarLists } from '../scripts/lib/star-lists.ts';
+import { extractRepos } from '../src/core/dataset.ts';
 import type { Repository } from '../src/types/repo.ts';
 
 describe('Data Pipeline', () => {
@@ -985,6 +986,10 @@ describe('Data Pipeline', () => {
       // 3. Verify results
       expect(result.length).toBe(2);
       expect(existsSync(dryRunTarget)).toBe(true);
+
+      const savedEnvelope = JSON.parse(readFileSync(dryRunTarget, 'utf-8'));
+      expect(savedEnvelope.schemaVersion).toBe(1);
+      expect(extractRepos(savedEnvelope)?.length).toBe(2);
 
       const whisper = result.find(r => r.name === 'whisper');
       expect(whisper?.category).toBe('ML / AI');
