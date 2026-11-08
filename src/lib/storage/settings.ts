@@ -122,6 +122,7 @@ const OLD_GEMINI_INTERVAL = 'starred_repos_gemini_interval';
 export interface ProviderSettingsEntry {
   apiKey: string;
   model: string;
+  modelAuto?: boolean;
   intervalSec: number | null; // null = AUTO (use provider default at call time)
   remember?: boolean;
 }
@@ -138,26 +139,59 @@ export function createDefaultLlmSettings(): LlmSettings {
       openai: {
         apiKey: '',
         model: PROVIDER_DEFAULTS.openai.defaultModel,
+        modelAuto: true,
         intervalSec: null,
         remember: false,
       },
       anthropic: {
         apiKey: '',
         model: PROVIDER_DEFAULTS.anthropic.defaultModel,
+        modelAuto: true,
         intervalSec: null,
         remember: false,
       },
       google: {
         apiKey: '',
         model: PROVIDER_DEFAULTS.google.defaultModel,
+        modelAuto: true,
         intervalSec: null,
         remember: false,
       },
       deepseek: {
         apiKey: '',
         model: PROVIDER_DEFAULTS.deepseek.defaultModel,
+        modelAuto: true,
         intervalSec: null,
         remember: false,
+      },
+    },
+  };
+}
+
+export function isModelAuto(settings: LlmSettings, providerId: LLMProviderId): boolean {
+  const entry = settings.providers[providerId];
+  return entry ? (entry.modelAuto ?? false) : true;
+}
+
+export function setModelAuto(
+  settings: LlmSettings,
+  providerId: LLMProviderId,
+  auto: boolean
+): LlmSettings {
+  const current = settings.providers[providerId] || {
+    apiKey: '',
+    model: PROVIDER_DEFAULTS[providerId].defaultModel,
+    modelAuto: auto,
+    intervalSec: null,
+    remember: false,
+  };
+  return {
+    ...settings,
+    providers: {
+      ...settings.providers,
+      [providerId]: {
+        ...current,
+        modelAuto: auto,
       },
     },
   };
@@ -234,6 +268,7 @@ function migrateLegacySettings(): LlmSettings | null {
   defaults.providers.google = {
     apiKey: oldKey?.trim() || '',
     model: oldModel?.trim() || PROVIDER_DEFAULTS.google.defaultModel,
+    modelAuto: oldModel && oldModel.trim() ? false : true,
     intervalSec,
     remember: remembered,
   };
@@ -301,6 +336,18 @@ export function loadLlmSettings(): LlmSettings {
     const intervalSec = typeof rawInterval === 'number' && rawInterval >= 1 ? rawInterval : null;
     const remember = Boolean(locP?.remember ?? sessP?.remember);
 
+    const storedModel = sessP?.model || locP?.model;
+    let modelAuto: boolean;
+    if (sessP?.modelAuto !== undefined) {
+      modelAuto = Boolean(sessP.modelAuto);
+    } else if (locP?.modelAuto !== undefined) {
+      modelAuto = Boolean(locP.modelAuto);
+    } else if (storedModel && storedModel.trim()) {
+      modelAuto = false;
+    } else {
+      modelAuto = true;
+    }
+
     let apiKey = '';
     if (remember && locP?.apiKey) {
       apiKey = locP.apiKey;
@@ -313,6 +360,7 @@ export function loadLlmSettings(): LlmSettings {
     result.providers[id] = {
       apiKey: apiKey.trim(),
       model,
+      modelAuto,
       intervalSec,
       remember,
     };
@@ -361,10 +409,12 @@ export function saveLlmSettings(
       remember: false,
     };
     const isRemembered = Boolean(entry.remember);
+    const modelAuto = entry.modelAuto !== undefined ? Boolean(entry.modelAuto) : true;
 
     localPayload.providers[id] = {
       apiKey: isRemembered ? entry.apiKey.trim() : '',
       model: entry.model || PROVIDER_DEFAULTS[id].defaultModel,
+      modelAuto,
       intervalSec: entry.intervalSec,
       remember: isRemembered,
     };
@@ -372,6 +422,7 @@ export function saveLlmSettings(
     sessionPayload.providers[id] = {
       apiKey: isRemembered ? '' : entry.apiKey.trim(),
       model: entry.model || PROVIDER_DEFAULTS[id].defaultModel,
+      modelAuto,
       intervalSec: entry.intervalSec,
       remember: isRemembered,
     };

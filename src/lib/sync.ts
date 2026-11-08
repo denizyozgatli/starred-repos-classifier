@@ -137,6 +137,8 @@ export interface LLMSyncOptions {
   model?: string;
   minIntervalSec?: number;
   minIntervalMs?: number;
+  allowModelHeal?: boolean;
+  onModelFallback?: (pickedModel: string) => void;
 }
 export type GeminiSyncOptions = LLMSyncOptions;
 
@@ -312,6 +314,8 @@ export async function syncStarredRepos(options: SyncStarredReposOptions): Promis
         model: effectiveLlm.model,
         minIntervalMs,
         signal,
+        allowModelHeal: effectiveLlm.allowModelHeal,
+        onModelFallback: effectiveLlm.onModelFallback,
       });
 
       // Calculate total LLM attempts needed for progress reporting

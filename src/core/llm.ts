@@ -14,6 +14,7 @@ import {
   LLMRateLimitError,
   LLMAuthError,
   LLMError,
+  isModelNotFoundError,
 } from './llm-providers.ts';
 
 export {
@@ -25,6 +26,7 @@ export {
   LLMRateLimitError,
   LLMAuthError,
   LLMError,
+  isModelNotFoundError,
 };
 
 export const DEFAULT_LLM_PROVIDER: LLMProviderId = 'google';
@@ -131,6 +133,8 @@ export interface LLMClassifierOptions {
   sleepFn?: (ms: number) => Promise<void>;
   maxRetries?: number;
   rateLimiter?: RateLimiter;
+  allowModelHeal?: boolean;
+  onModelFallback?: (pickedModel: string) => void;
 }
 
 export function createLLMClassifier(
@@ -141,12 +145,16 @@ export function createLLMClassifier(
 
   const {
     apiKey,
-    model = providerDef.defaultModel,
     minIntervalMs = providerDef.defaultIntervalSec * 1000,
     signal,
     sleepFn,
     maxRetries = 2,
+    allowModelHeal = false,
+    onModelFallback,
   } = options;
+
+  let activeModel = options.model || providerDef.defaultModel;
+  let hasHealed = false;
 
   const rateLimiter = options.rateLimiter ?? new RateLimiter({ minIntervalMs });
 
@@ -159,8 +167,8 @@ export function createLLMClassifier(
 
     const prompt = buildClassificationPrompt(repo);
 
-    try {
-      const responseText = await executeWithRetry(
+    const callWithModel = async (modelToUse: string): Promise<string> => {
+      return executeWithRetry(
         async () => {
           if (signal?.aborted) {
             const err = new Error('Operation aborted');
@@ -170,7 +178,7 @@ export function createLLMClassifier(
 
           return await providerDef.classify({
             apiKey,
-            model,
+            model: modelToUse,
             prompt,
             signal,
           });
@@ -182,21 +190,11 @@ export function createLLMClassifier(
           signal,
         }
       );
+    };
 
-      const parsed = parseClassificationResponse(responseText);
-      if (parsed) {
-        return {
-          category: parsed.category,
-          method: 'llm',
-          confidence: parsed.confidence,
-        };
-      }
-
-      return {
-        category: 'Other',
-        method: 'fallback',
-        confidence: 0.5,
-      };
+    let responseText: string;
+    try {
+      responseText = await callWithModel(activeModel);
     } catch (err) {
       if (signal?.aborted) {
         const abortErr = new Error('Operation aborted');
@@ -204,9 +202,53 @@ export function createLLMClassifier(
         throw signal.reason || abortErr;
       }
 
-      // Propagate typed errors (Auth, RateLimit, Error)
-      throw err;
+      if (allowModelHeal && !hasHealed && isModelNotFoundError(err)) {
+        hasHealed = true;
+        let pickedModel: string | null = null;
+        try {
+          const models = await providerDef.listModels({ apiKey, signal });
+          if (signal?.aborted) {
+            const abortErr = new Error('Operation aborted');
+            abortErr.name = 'AbortError';
+            throw signal.reason || abortErr;
+          }
+          pickedModel = providerDef.pickPreferredModel(models);
+        } catch (listErr) {
+          if (signal?.aborted) throw listErr;
+          throw err;
+        }
+
+        if (pickedModel && pickedModel !== activeModel) {
+          activeModel = pickedModel;
+          try {
+            responseText = await callWithModel(activeModel);
+            onModelFallback?.(pickedModel);
+          } catch (retryErr) {
+            if (signal?.aborted) throw retryErr;
+            throw err;
+          }
+        } else {
+          throw err;
+        }
+      } else {
+        throw err;
+      }
     }
+
+    const parsed = parseClassificationResponse(responseText);
+    if (parsed) {
+      return {
+        category: parsed.category,
+        method: 'llm',
+        confidence: parsed.confidence,
+      };
+    }
+
+    return {
+      category: 'Other',
+      method: 'fallback',
+      confidence: 0.5,
+    };
   };
 }
 

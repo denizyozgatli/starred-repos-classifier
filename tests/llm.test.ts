@@ -10,6 +10,7 @@ import {
   getLLMProvider,
   LLM_PROVIDERS,
   type LLMProviderId,
+  isModelNotFoundError,
 } from '../src/core/llm.ts';
 import {
   RateLimiter,
@@ -27,6 +28,8 @@ import {
   clearLlmKey,
   detectProvider,
   createDefaultLlmSettings,
+  isModelAuto,
+  setModelAuto,
 } from '../src/lib/storage/settings.ts';
 import { MemoryStore } from '../src/lib/storage/datasetStore.ts';
 import { syncStarredRepos } from '../src/lib/sync.ts';
@@ -86,6 +89,35 @@ describe('LLM & Multi-Provider Core (src/core/llm.ts & src/core/llm-providers.ts
       expect(LLM_PROVIDERS.google.keyPattern.test('sk-12345')).toBe(false);
 
       expect(LLM_PROVIDERS.deepseek.keyPattern.test('sk-deepseek-123')).toBe(true);
+    });
+
+    it('implements pickPreferredModel for all 4 providers', () => {
+      // Google: first with 'flash'
+      expect(LLM_PROVIDERS.google.pickPreferredModel(['gemini-2.5-pro', 'gemini-3.8-flash', 'gemini-1.5-pro'])).toBe('gemini-3.8-flash');
+      expect(LLM_PROVIDERS.google.pickPreferredModel(['gemini-pro', 'custom-model'])).toBeNull();
+
+      // OpenAI: first matching /^gpt-6/ then /mini/
+      expect(LLM_PROVIDERS.openai.pickPreferredModel(['gpt-4o', 'gpt-6-luna', 'gpt-4o-mini'])).toBe('gpt-6-luna');
+      expect(LLM_PROVIDERS.openai.pickPreferredModel(['gpt-4o', 'gpt-4o-mini', 'o1'])).toBe('gpt-4o-mini');
+      expect(LLM_PROVIDERS.openai.pickPreferredModel(['o1', 'o3', 'text-davinci'])).toBeNull();
+
+      // Anthropic: first containing 'sonnet'
+      expect(LLM_PROVIDERS.anthropic.pickPreferredModel(['claude-3-5-haiku', 'claude-sonnet-5-5'])).toBe('claude-sonnet-5-5');
+      expect(LLM_PROVIDERS.anthropic.pickPreferredModel(['claude-3-opus', 'claude-haiku'])).toBeNull();
+
+      // DeepSeek: 'deepseek-chat' if present
+      expect(LLM_PROVIDERS.deepseek.pickPreferredModel(['deepseek-coder', 'deepseek-chat'])).toBe('deepseek-chat');
+      expect(LLM_PROVIDERS.deepseek.pickPreferredModel(['deepseek-reasoner'])).toBeNull();
+    });
+
+    it('detects model not found errors with isModelNotFoundError', () => {
+      expect(isModelNotFoundError({ status: 404 })).toBe(true);
+      expect(isModelNotFoundError({ code: 'model_not_found' })).toBe(true);
+      expect(isModelNotFoundError({ code: 'not_found_error' })).toBe(true);
+      expect(isModelNotFoundError({ code: 'NOT_FOUND' })).toBe(true);
+      expect(isModelNotFoundError({ message: 'The model `foo` was not found' })).toBe(true);
+      expect(isModelNotFoundError({ status: 500, message: 'Internal Server Error' })).toBe(false);
+      expect(isModelNotFoundError(null)).toBe(false);
     });
   });
 
@@ -495,6 +527,108 @@ describe('LLM & Multi-Provider Core (src/core/llm.ts & src/core/llm-providers.ts
       });
     });
 
+    it('self-heals when model is not found (404): fetches listModels, retries with preferred model, and invokes onModelFallback once', async () => {
+      const callLog: string[] = [];
+      const fallbackCalls: string[] = [];
+
+      globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+
+        // 1. Initial classify request with retired model -> 404 NOT_FOUND
+        if (url.includes(':generateContent') && url.includes('retired-gemini-model')) {
+          callLog.push('initial-classify-retired');
+          return new Response(
+            JSON.stringify({
+              error: {
+                code: 404,
+                message: 'models/retired-gemini-model is not found for API version v1beta',
+                status: 'NOT_FOUND',
+              },
+            }),
+            { status: 404, headers: { 'Content-Type': 'application/json' } }
+          );
+        }
+
+        // 2. Self-healing listModels call
+        if (url.includes('/v1beta/models') && !url.includes(':generateContent')) {
+          callLog.push('list-models');
+          return new Response(
+            JSON.stringify({
+              models: [
+                { name: 'models/gemini-2.0-pro', supportedGenerationMethods: ['generateContent'] },
+                { name: 'models/gemini-3.8-flash', supportedGenerationMethods: ['generateContent'] },
+              ],
+            }),
+            { status: 200, headers: { 'Content-Type': 'application/json' } }
+          );
+        }
+
+        // 3. Retried classify call with picked model (gemini-3.8-flash) -> 200 OK
+        if (url.includes(':generateContent') && url.includes('gemini-3.8-flash')) {
+          callLog.push('retry-classify-picked');
+          return new Response(
+            JSON.stringify({
+              candidates: [
+                {
+                  content: {
+                    parts: [{ text: JSON.stringify({ category: 'Web Frontend', confidence: 0.95 }) }],
+                  },
+                },
+              ],
+            }),
+            { status: 200, headers: { 'Content-Type': 'application/json' } }
+          );
+        }
+
+        throw new Error(`Unexpected request to ${url}`);
+      });
+
+      const classifier = createLLMClassifier({
+        provider: 'google',
+        apiKey: 'AIzaSyTestKey',
+        model: 'retired-gemini-model',
+        allowModelHeal: true,
+        onModelFallback: (model: string) => {
+          fallbackCalls.push(model);
+        },
+        minIntervalMs: 0,
+      });
+
+      const result = await classifier(sampleRepo);
+      expect(result.category).toBe('Web Frontend');
+      expect(result.confidence).toBe(0.95);
+      expect(callLog).toEqual(['initial-classify-retired', 'list-models', 'retry-classify-picked']);
+      expect(fallbackCalls).toEqual(['gemini-3.8-flash']);
+    });
+
+    it('does not attempt model healing when allowModelHeal is false', async () => {
+      let fetchCount = 0;
+      globalThis.fetch = vi.fn(async () => {
+        fetchCount++;
+        return new Response(
+          JSON.stringify({
+            error: {
+              code: 404,
+              message: 'model not found',
+              status: 'NOT_FOUND',
+            },
+          }),
+          { status: 404, headers: { 'Content-Type': 'application/json' } }
+        );
+      });
+
+      const classifier = createLLMClassifier({
+        provider: 'google',
+        apiKey: 'AIzaSyTestKey',
+        model: 'unknown-model',
+        allowModelHeal: false,
+        minIntervalMs: 0,
+      });
+
+      await expect(classifier(sampleRepo)).rejects.toThrow();
+      expect(fetchCount).toBe(1);
+    });
+
     it('ensures API key is NEVER included in error messages when an API error occurs', async () => {
       const secretKey = 'sk-extremely-secret-key-xyz999';
 
@@ -643,23 +777,37 @@ describe('LLM & Multi-Provider Core (src/core/llm.ts & src/core/llm-providers.ts
     });
 
     describe('Provider-Aware Settings Schema & Persistence', () => {
-      it('loads default settings when storage is empty', () => {
+      it('loads default settings when storage is empty with modelAuto default true', () => {
         const settings = loadLlmSettings();
         expect(settings.provider).toBe('google');
         expect(settings.providers.openai.model).toBe('gpt-6-luna');
+        expect(settings.providers.openai.modelAuto).toBe(true);
+        expect(isModelAuto(settings, 'openai')).toBe(true);
         expect(settings.providers.anthropic.model).toBe('claude-sonnet-5-5');
+        expect(settings.providers.anthropic.modelAuto).toBe(true);
         expect(settings.providers.google.model).toBe('gemini-3.8-flash');
+        expect(settings.providers.google.modelAuto).toBe(true);
         expect(settings.providers.deepseek.model).toBe('deepseek-chat');
+        expect(settings.providers.deepseek.modelAuto).toBe(true);
         expect(settings.providers.openai.intervalSec).toBeNull();
+      });
+
+      it('supports isModelAuto and setModelAuto helpers', () => {
+        let settings = createDefaultLlmSettings();
+        expect(isModelAuto(settings, 'google')).toBe(true);
+        settings = setModelAuto(settings, 'google', false);
+        expect(isModelAuto(settings, 'google')).toBe(false);
+        expect(settings.providers.google.modelAuto).toBe(false);
       });
 
       it('persists and roundtrips multi-provider settings with remember flags', () => {
         const settings = createDefaultLlmSettings();
         settings.provider = 'anthropic';
-        // Google remembered
+        // Google remembered with custom model and modelAuto false
         settings.providers.google = {
           apiKey: 'AIzaSyGoogleKey',
           model: 'gemini-3.8-flash',
+          modelAuto: false,
           intervalSec: 4.5,
           remember: true,
         };
@@ -667,6 +815,7 @@ describe('LLM & Multi-Provider Core (src/core/llm.ts & src/core/llm-providers.ts
         settings.providers.openai = {
           apiKey: 'sk-proj-OpenAiKey',
           model: 'gpt-6-luna',
+          modelAuto: true,
           intervalSec: 1.5,
           remember: false,
         };
@@ -679,20 +828,24 @@ describe('LLM & Multi-Provider Core (src/core/llm.ts & src/core/llm-providers.ts
 
         // Remembered key in localStorage, stripped from sessionStorage
         expect(rawLocal.providers.google.apiKey).toBe('AIzaSyGoogleKey');
+        expect(rawLocal.providers.google.modelAuto).toBe(false);
         expect(rawSession.providers.google.apiKey).toBe('');
 
         // Non-remembered key in sessionStorage, stripped from localStorage
         expect(rawSession.providers.openai.apiKey).toBe('sk-proj-OpenAiKey');
         expect(rawLocal.providers.openai.apiKey).toBe('');
+        expect(rawLocal.providers.openai.modelAuto).toBe(true);
 
         // Reload and assert merged result
         const loaded = loadLlmSettings();
         expect(loaded.provider).toBe('anthropic');
         expect(loaded.providers.google.apiKey).toBe('AIzaSyGoogleKey');
+        expect(loaded.providers.google.modelAuto).toBe(false);
         expect(loaded.providers.google.intervalSec).toBe(4.5);
         expect(loaded.providers.google.remember).toBe(true);
 
         expect(loaded.providers.openai.apiKey).toBe('sk-proj-OpenAiKey');
+        expect(loaded.providers.openai.modelAuto).toBe(true);
         expect(loaded.providers.openai.intervalSec).toBe(1.5);
         expect(loaded.providers.openai.remember).toBe(false);
       });
@@ -715,7 +868,7 @@ describe('LLM & Multi-Provider Core (src/core/llm.ts & src/core/llm-providers.ts
     });
 
     describe('Legacy Settings Migration', () => {
-      it('migrates old single-Gemini keys into providers.google and deletes old keys', () => {
+      it('migrates old single-Gemini keys into providers.google and deletes old keys, keeping modelAuto=false when model exists', () => {
         mockLocal.setItem('starred_repos_gemini_key', 'AIzaSyLegacyKey');
         mockLocal.setItem('starred_repos_gemini_model', 'custom-gemini-model');
         mockLocal.setItem('starred_repos_gemini_interval', '5.5');
@@ -724,6 +877,7 @@ describe('LLM & Multi-Provider Core (src/core/llm.ts & src/core/llm-providers.ts
         expect(migrated.provider).toBe('google');
         expect(migrated.providers.google.apiKey).toBe('AIzaSyLegacyKey');
         expect(migrated.providers.google.model).toBe('custom-gemini-model');
+        expect(migrated.providers.google.modelAuto).toBe(false);
         expect(migrated.providers.google.intervalSec).toBe(5.5);
         expect(migrated.providers.google.remember).toBe(true);
 

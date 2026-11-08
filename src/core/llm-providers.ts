@@ -45,14 +45,47 @@ export class LLMAuthError extends LLMProviderError {
 }
 
 export class LLMError extends LLMProviderError {
+  readonly code?: string;
+
   constructor(
     provider: LLMProviderId,
     message: string,
-    options?: { status?: number; cause?: unknown }
+    options?: { status?: number; code?: string; cause?: unknown }
   ) {
     super(provider, message, options);
     this.name = 'LLMError';
+    this.code = options?.code;
   }
+}
+
+export function isModelNotFoundError(err: unknown): boolean {
+  if (!err || typeof err !== 'object') return false;
+  const status = (err as { status?: number }).status;
+  if (status === 404) return true;
+
+  const code = (err as { code?: string }).code;
+  const message = (err as { message?: string }).message || '';
+
+  if (
+    code === 'model_not_found' ||
+    code === 'not_found_error' ||
+    code === 'NOT_FOUND'
+  ) {
+    return true;
+  }
+  const lower = message.toLowerCase();
+  if (
+    lower.includes('model_not_found') ||
+    lower.includes('not_found_error') ||
+    lower.includes('not_found') ||
+    lower.includes('not found') ||
+    lower.includes('does not exist') ||
+    lower.includes('unrecognized model') ||
+    lower.includes('invalid model')
+  ) {
+    return true;
+  }
+  return false;
 }
 
 export interface LLMProviderDef {
@@ -62,6 +95,7 @@ export interface LLMProviderDef {
   keyPlaceholder: string;
   defaultModel: string;
   defaultIntervalSec: number;
+  pickPreferredModel(models: string[]): string | null;
   listModels(args: { apiKey: string; signal?: AbortSignal }): Promise<string[]>;
   classify(args: { apiKey: string; model: string; prompt: string; signal?: AbortSignal }): Promise<string>;
 }
@@ -135,9 +169,18 @@ function handleUniformError(
   retryAfterSec?: number
 ): never {
   let errMsg = '';
+  let errCode: string | undefined;
   if (json && typeof json.error === 'object' && json.error !== null) {
     const errObj = json.error as Record<string, unknown>;
     errMsg = typeof errObj.message === 'string' ? errObj.message : '';
+    errCode =
+      typeof errObj.code === 'string'
+        ? errObj.code
+        : typeof errObj.type === 'string'
+        ? errObj.type
+        : typeof errObj.status === 'string'
+        ? errObj.status
+        : undefined;
   } else if (json && typeof json.message === 'string') {
     errMsg = json.message;
   }
@@ -168,7 +211,7 @@ function handleUniformError(
   }
 
   // Other HTTP errors
-  throw new LLMError(provider, errMsg || `HTTP ${status}`, { status });
+  throw new LLMError(provider, errMsg || `HTTP ${status}`, { status, code: errCode });
 }
 
 export const openaiProvider: LLMProviderDef = {
@@ -178,6 +221,13 @@ export const openaiProvider: LLMProviderDef = {
   keyPlaceholder: 'sk-...',
   defaultModel: 'gpt-6-luna',
   defaultIntervalSec: 1,
+  pickPreferredModel(models: string[]): string | null {
+    const gpt6 = models.find(m => /^gpt-6/i.test(m));
+    if (gpt6) return gpt6;
+    const mini = models.find(m => /mini/i.test(m));
+    if (mini) return mini;
+    return null;
+  },
   async listModels({ apiKey, signal }) {
     const res = await safeFetch(
       'https://api.openai.com/v1/models',
@@ -258,6 +308,10 @@ export const deepseekProvider: LLMProviderDef = {
   keyPlaceholder: 'sk-...',
   defaultModel: 'deepseek-chat',
   defaultIntervalSec: 1,
+  pickPreferredModel(models: string[]): string | null {
+    const chat = models.find(m => m === 'deepseek-chat');
+    return chat || null;
+  },
   async listModels({ apiKey, signal }) {
     const res = await safeFetch(
       'https://api.deepseek.com/models',
@@ -316,6 +370,10 @@ export const anthropicProvider: LLMProviderDef = {
   keyPlaceholder: 'sk-ant-...',
   defaultModel: 'claude-sonnet-5-5',
   defaultIntervalSec: 1,
+  pickPreferredModel(models: string[]): string | null {
+    const sonnet = models.find(m => m.toLowerCase().includes('sonnet'));
+    return sonnet || null;
+  },
   async listModels({ apiKey, signal }) {
     const res = await safeFetch(
       'https://api.anthropic.com/v1/models',
@@ -381,6 +439,10 @@ export const googleProvider: LLMProviderDef = {
   keyPlaceholder: 'AIza...',
   defaultModel: 'gemini-3.8-flash',
   defaultIntervalSec: 4,
+  pickPreferredModel(models: string[]): string | null {
+    const flash = models.find(m => m.toLowerCase().includes('flash'));
+    return flash || null;
+  },
   async listModels({ apiKey, signal }) {
     const url = `https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(apiKey.trim())}`;
     const res = await safeFetch(url, { signal }, 'google', apiKey);

@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useCallback } from 'react';
-import { AlertTriangle, RefreshCw, X } from 'lucide-react';
+import { AlertTriangle, RefreshCw, X, Sparkles } from 'lucide-react';
 import type { Repository, RepositoryCategory } from './types/repo.ts';
 import type { DatasetValidationResult } from './lib/datasetValidation.ts';
 import { computeContextualFilterOptions, filterRepositories } from './lib/filters.ts';
@@ -243,6 +243,24 @@ export default function App() {
                 <X className="w-3.5 h-3.5" />
               </button>
             </div>
+          </div>
+        )}
+
+        {/* LLM Model Retired / Switched Banner */}
+        {sync.modelFallbackNotice && (
+          <div className="bg-[#161b22] border border-[#58a6ff]/40 rounded-xl px-4 py-2.5 flex items-center justify-between text-xs text-[#58a6ff] animate-in fade-in">
+            <div className="flex items-center gap-2">
+              <Sparkles className="w-4 h-4 shrink-0 text-[#58a6ff]" aria-hidden="true" />
+              <span>{sync.modelFallbackNotice}</span>
+            </div>
+            <button
+              type="button"
+              onClick={sync.clearModelFallbackNotice}
+              className="text-github-muted hover:text-white p-1 rounded-md transition-colors cursor-pointer"
+              aria-label="Dismiss notice"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
           </div>
         )}
 

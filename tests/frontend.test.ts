@@ -916,7 +916,7 @@ describe('Frontend Logic', () => {
       expect(html).toContain('DeepSeek');
     });
 
-    it('renders auto interval checkbox with recommended delay note and manual model entry affordance', () => {
+    it('renders auto interval checkbox with recommended delay note and advanced settings disclosure', () => {
       const html = renderToString(
         React.createElement(SettingsModal, {
           isOpen: true,
@@ -926,8 +926,66 @@ describe('Frontend Logic', () => {
       );
       expect(html).toContain('Auto (recommended)');
       expect(html).toContain("Auto uses the provider&#x27;s recommended delay");
-      expect(html).toContain('Enter manually');
+      expect(html).toContain('Advanced Settings');
       expect(html).toContain('AI Classification Settings');
+    });
+
+    it('A1: populated list renders >1 <option> with Auto first and provider default recommended', () => {
+      const html = renderToString(
+        React.createElement(SettingsModal, {
+          isOpen: true,
+          onClose: () => {},
+          hasCachedData: true,
+          initialModelList: ['gemini-3.8-flash', 'gemini-2.5-pro', 'gemini-1.5-flash'],
+        })
+      );
+      expect(html).toContain('Auto (recommended)');
+      expect(html).toContain('gemini-3.8-flash (Recommended)');
+      expect(html).toContain('gemini-2.5-pro');
+      expect(html).toContain('gemini-1.5-flash');
+      expect(html).toContain('Enter manually');
+    });
+
+    it('A1: loading state renders loading line and manual-entry input', () => {
+      const html = renderToString(
+        React.createElement(SettingsModal, {
+          isOpen: true,
+          onClose: () => {},
+          hasCachedData: true,
+          initialIsLoadingModels: true,
+        })
+      );
+      expect(html).toContain('Loading models…');
+      expect(html).toContain('id="llm-model-input"');
+      expect(html).not.toContain('id="llm-model-picker"');
+    });
+
+    it('A1: error state renders error text and manual-entry input', () => {
+      const html = renderToString(
+        React.createElement(SettingsModal, {
+          isOpen: true,
+          onClose: () => {},
+          hasCachedData: true,
+          initialModelListError: 'Could not load model list — enter the model id manually.',
+        })
+      );
+      expect(html).toContain('Could not load model list — enter the model id manually.');
+      expect(html).toContain('id="llm-model-input"');
+      expect(html).not.toContain('id="llm-model-picker"');
+    });
+
+    it('A2: manual mode renders back affordance and has no chevron on text input', () => {
+      const html = renderToString(
+        React.createElement(SettingsModal, {
+          isOpen: true,
+          onClose: () => {},
+          hasCachedData: true,
+          initialManualModelEntry: true,
+        })
+      );
+      expect(html).toContain('Back to list');
+      expect(html).toContain('id="llm-model-input"');
+      expect(html).not.toContain('id="llm-model-picker"');
     });
   });
 });

@@ -1,11 +1,26 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Settings, X, Eye, EyeOff, ShieldCheck, Sparkles, Trash2, Check, RefreshCw } from 'lucide-react';
+import {
+  Settings,
+  X,
+  Eye,
+  EyeOff,
+  ShieldCheck,
+  Sparkles,
+  Trash2,
+  Check,
+  RefreshCw,
+  AlertCircle,
+  ChevronDown,
+  List,
+} from 'lucide-react';
 import {
   loadLlmSettings,
   saveLlmSettings,
   clearLlmKey,
   detectProvider,
   createDefaultLlmSettings,
+  isModelAuto,
+  setModelAuto,
   type LlmSettings,
 } from '../lib/storage/settings.ts';
 import {
@@ -16,13 +31,62 @@ import {
 import { PROVIDER_DEFAULTS } from '../core/llm.ts';
 import type { LLMSyncOptions } from '../lib/sync.ts';
 
-interface SettingsModalProps {
+export interface SettingsModalProps {
   isOpen: boolean;
   onClose: () => void;
   onReclassifyOther?: (config?: LLMSyncOptions) => Promise<boolean | void>;
   isSyncing?: boolean;
   hasCachedData?: boolean;
   fetchLlmModels?: (providerId: LLMProviderId, apiKey: string) => Promise<string[]>;
+  initialModelList?: string[];
+  initialIsLoadingModels?: boolean;
+  initialModelListError?: string | null;
+  initialManualModelEntry?: boolean;
+}
+
+export function sortModelsByFamily(providerId: LLMProviderId, models: string[]): string[] {
+  const deduped = Array.from(new Set(models));
+  const defaultModel = PROVIDER_DEFAULTS[providerId].defaultModel;
+
+  return deduped.sort((a, b) => {
+    // Default model always first
+    if (a === defaultModel) return -1;
+    if (b === defaultModel) return 1;
+
+    switch (providerId) {
+      case 'google': {
+        const aFlash = a.toLowerCase().includes('flash');
+        const bFlash = b.toLowerCase().includes('flash');
+        if (aFlash && !bFlash) return -1;
+        if (!aFlash && bFlash) return 1;
+        break;
+      }
+      case 'openai': {
+        const aGpt6 = /^gpt-6/i.test(a);
+        const bGpt6 = /^gpt-6/i.test(b);
+        if (aGpt6 && !bGpt6) return -1;
+        if (!aGpt6 && bGpt6) return 1;
+        const aMini = /mini/i.test(a);
+        const bMini = /mini/i.test(b);
+        if (aMini && !bMini) return -1;
+        if (!aMini && bMini) return 1;
+        break;
+      }
+      case 'anthropic': {
+        const aSonnet = a.toLowerCase().includes('sonnet');
+        const bSonnet = b.toLowerCase().includes('sonnet');
+        if (aSonnet && !bSonnet) return -1;
+        if (!aSonnet && bSonnet) return 1;
+        break;
+      }
+      case 'deepseek': {
+        if (a === 'deepseek-chat') return -1;
+        if (b === 'deepseek-chat') return 1;
+        break;
+      }
+    }
+    return a.localeCompare(b);
+  });
 }
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({
@@ -32,6 +96,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   isSyncing = false,
   hasCachedData = false,
   fetchLlmModels,
+  initialModelList,
+  initialIsLoadingModels,
+  initialModelListError,
+  initialManualModelEntry,
 }) => {
   const [settings, setSettings] = useState<LlmSettings>(() => createDefaultLlmSettings());
   const [showKey, setShowKey] = useState(false);
@@ -39,10 +107,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [savedBanner, setSavedBanner] = useState(false);
 
   // Model list state (kept in component state only, NOT persisted)
-  const [modelList, setModelList] = useState<string[] | null>(null);
-  const [isLoadingModels, setIsLoadingModels] = useState(false);
-  const [modelListError, setModelListError] = useState<string | null>(null);
-  const [manualModelEntry, setManualModelEntry] = useState(false);
+  const [modelList, setModelList] = useState<string[] | null>(initialModelList ?? null);
+  const [isLoadingModels, setIsLoadingModels] = useState<boolean>(initialIsLoadingModels ?? false);
+  const [modelListError, setModelListError] = useState<string | null>(initialModelListError ?? null);
+  const [manualModelEntry, setManualModelEntry] = useState<boolean>(initialManualModelEntry ?? false);
 
   const modalRef = useRef<HTMLDivElement>(null);
 
@@ -51,11 +119,14 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const currentEntry = settings.providers[currentProviderId] || {
     apiKey: '',
     model: PROVIDER_DEFAULTS[currentProviderId].defaultModel,
+    modelAuto: true,
     intervalSec: null,
     remember: false,
   };
   const currentKey = currentEntry.apiKey;
   const currentModel = currentEntry.model || PROVIDER_DEFAULTS[currentProviderId].defaultModel;
+  const isAutoModel = isModelAuto(settings, currentProviderId);
+
   const isAutoInterval = currentEntry.intervalSec === null;
   const displayInterval = isAutoInterval
     ? PROVIDER_DEFAULTS[currentProviderId].defaultIntervalSec
@@ -94,16 +165,25 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       setShowKey(false);
       setDetectHint(null);
       setSavedBanner(false);
-      setModelList(null);
-      setModelListError(null);
-      setManualModelEntry(false);
+      if (initialModelList === undefined) {
+        setModelList(null);
+      }
+      if (initialIsLoadingModels === undefined) {
+        setIsLoadingModels(false);
+      }
+      if (initialModelListError === undefined) {
+        setModelListError(null);
+      }
+      if (initialManualModelEntry === undefined) {
+        setManualModelEntry(false);
+      }
 
       const activeEntry = loaded.providers[loaded.provider];
-      if (activeEntry?.apiKey?.trim()) {
+      if (activeEntry?.apiKey?.trim() && initialModelList === undefined) {
         fetchModelsForActive(loaded.provider, activeEntry.apiKey.trim());
       }
     }
-  }, [isOpen, fetchModelsForActive]);
+  }, [isOpen, fetchModelsForActive, initialModelList, initialIsLoadingModels, initialModelListError, initialManualModelEntry]);
 
   // Handle ESC key
   useEffect(() => {
@@ -172,21 +252,47 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     }
   };
 
-  const handleModelChange = (newModel: string) => {
-    if (newModel === '__manual__') {
+  const handleSelectModelChange = (val: string) => {
+    if (val === '__auto__') {
+      setSettings(prev => setModelAuto(prev, prev.provider, true));
+      setManualModelEntry(false);
+      return;
+    }
+    if (val === '__manual__') {
+      setSettings(prev => setModelAuto(prev, prev.provider, false));
       setManualModelEntry(true);
       return;
     }
-    setSettings(prev => ({
-      ...prev,
-      providers: {
-        ...prev.providers,
-        [prev.provider]: {
-          ...prev.providers[prev.provider],
-          model: newModel,
+    setSettings(prev => {
+      const updated = setModelAuto(prev, prev.provider, false);
+      return {
+        ...updated,
+        providers: {
+          ...updated.providers,
+          [updated.provider]: {
+            ...updated.providers[updated.provider],
+            model: val,
+          },
         },
-      },
-    }));
+      };
+    });
+    setManualModelEntry(false);
+  };
+
+  const handleManualModelChange = (val: string) => {
+    setSettings(prev => {
+      const updated = setModelAuto(prev, prev.provider, false);
+      return {
+        ...updated,
+        providers: {
+          ...updated.providers,
+          [updated.provider]: {
+            ...updated.providers[updated.provider],
+            model: val,
+          },
+        },
+      };
+    });
   };
 
   const handleAutoIntervalToggle = (checked: boolean) => {
@@ -261,17 +367,25 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     onClose();
     if (onReclassifyOther) {
       const activeEntry = settings.providers[currentProviderId];
+      const autoMode = isModelAuto(settings, currentProviderId);
       const config: LLMSyncOptions = {
         provider: currentProviderId,
         apiKey: activeEntry.apiKey.trim(),
-        model: activeEntry.model || PROVIDER_DEFAULTS[currentProviderId].defaultModel,
+        model: autoMode ? undefined : (activeEntry.model || PROVIDER_DEFAULTS[currentProviderId].defaultModel),
         minIntervalSec: activeEntry.intervalSec ?? undefined,
+        allowModelHeal: autoMode,
       };
       await onReclassifyOther(config);
     }
   };
 
   const hasKey = Boolean(currentKey.trim());
+  const defaultModel = PROVIDER_DEFAULTS[currentProviderId].defaultModel;
+
+  // Compute sorted deduplicated models
+  const sortedModels = modelList && modelList.length > 0
+    ? sortModelsByFamily(currentProviderId, modelList)
+    : [defaultModel];
 
   return (
     <div
@@ -413,88 +527,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             )}
           </div>
 
-          {/* Model & Interval Grid */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
-            {/* Model Picker */}
-            <div className="space-y-1.5">
-              <div className="flex items-center justify-between">
-                <label htmlFor="llm-model-picker" className="font-semibold text-white/90">
-                  Model
-                </label>
-                <div className="flex items-center gap-1.5">
-                  {manualModelEntry && modelList && modelList.length > 0 && (
-                    <button
-                      type="button"
-                      onClick={() => setManualModelEntry(false)}
-                      className="text-[11px] text-[#58a6ff] hover:underline cursor-pointer"
-                    >
-                      Choose from list
-                    </button>
-                  )}
-                  {hasKey && (
-                    <button
-                      type="button"
-                      onClick={() => fetchModelsForActive(currentProviderId, currentKey)}
-                      disabled={isLoadingModels}
-                      className="text-github-muted hover:text-white p-0.5 rounded transition-colors cursor-pointer disabled:opacity-40"
-                      title="Refresh model list"
-                      aria-label="Refresh model list"
-                    >
-                      <RefreshCw className={`w-3 h-3 ${isLoadingModels ? 'animate-spin' : ''}`} />
-                    </button>
-                  )}
-                </div>
-              </div>
-
-              {manualModelEntry ? (
-                <input
-                  id="llm-model-picker"
-                  type="text"
-                  value={currentModel}
-                  onChange={e => handleModelChange(e.target.value)}
-                  placeholder={PROVIDER_DEFAULTS[currentProviderId].defaultModel}
-                  className="w-full bg-[#0d1117] border border-[#30363d] focus:border-[#58a6ff] focus:ring-1 focus:ring-[#58a6ff] rounded-xl text-xs font-mono px-3 py-2 text-white placeholder:text-github-muted focus-visible:outline-none transition-colors"
-                />
-              ) : (
-                <select
-                  id="llm-model-picker"
-                  value={currentModel}
-                  onChange={e => handleModelChange(e.target.value)}
-                  disabled={isLoadingModels}
-                  className="w-full bg-[#0d1117] border border-[#30363d] focus:border-[#58a6ff] focus:ring-1 focus:ring-[#58a6ff] rounded-xl text-xs font-mono px-3 py-2 text-white placeholder:text-github-muted focus-visible:outline-none transition-colors cursor-pointer"
-                >
-                  {isLoadingModels ? (
-                    <option disabled value="">
-                      Loading models…
-                    </option>
-                  ) : (
-                    <>
-                      {/* Show current model if not in fetched list */}
-                      {modelList && !modelList.includes(currentModel) && (
-                        <option value={currentModel}>{currentModel}</option>
-                      )}
-                      {modelList?.map(m => (
-                        <option key={m} value={m}>
-                          {m}
-                        </option>
-                      ))}
-                      {!modelList && (
-                        <option value={currentModel}>{currentModel}</option>
-                      )}
-                      <option value="__manual__">Enter manually…</option>
-                    </>
-                  )}
-                </select>
-              )}
-
-              {modelListError && (
-                <p className="text-[11px] text-[#f85149] leading-relaxed">
-                  {modelListError}
-                </p>
-              )}
-            </div>
-
-            {/* Request Interval */}
+          {/* Request Interval */}
+          <div className="space-y-2 pt-1">
             <div className="space-y-1.5">
               <div className="flex items-center justify-between">
                 <label htmlFor="llm-interval-input" className="font-semibold text-white/90">
@@ -521,12 +555,116 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 className="w-full bg-[#0d1117] border border-[#30363d] focus:border-[#58a6ff] focus:ring-1 focus:ring-[#58a6ff] rounded-xl text-xs font-mono px-3 py-2 text-white placeholder:text-github-muted focus-visible:outline-none transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               />
             </div>
+            <p className="text-[11px] text-github-muted leading-relaxed">
+              Auto uses the provider's recommended delay. Lower it (≤1s) if you have a paid/high-quota tier; raise it (10–15s) if you see rate-limit warnings on a free tier. Failed requests retry automatically; repos that still fail fall back to rule-based classification.
+            </p>
           </div>
 
-          {/* Interval Note */}
-          <p className="text-[11px] text-github-muted leading-relaxed">
-            Auto uses the provider's recommended delay. Lower it (≤1s) if you have a paid/high-quota tier; raise it (10–15s) if you see rate-limit warnings on a free tier. Failed requests retry automatically; repos that still fail fall back to rule-based classification.
-          </p>
+          {/* Advanced Drawer: Model Picker */}
+          <details className="group border border-[#30363d] rounded-xl bg-[#0d1117]/40 overflow-hidden">
+            <summary className="flex items-center justify-between px-3.5 py-2.5 text-xs font-semibold text-white/90 cursor-pointer select-none hover:bg-[#21262d]/50 transition-colors">
+              <span className="flex items-center gap-2">
+                <span>Advanced Settings</span>
+                <span className="text-[11px] font-normal text-github-muted">
+                  (Model: {isAutoModel ? 'Auto' : currentModel})
+                </span>
+              </span>
+              <ChevronDown className="w-3.5 h-3.5 text-github-muted transition-transform group-open:rotate-180" />
+            </summary>
+
+            <div className="p-3.5 pt-2 border-t border-[#30363d]/60 space-y-3">
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <label htmlFor="llm-model-picker" className="font-semibold text-white/90">
+                    Model
+                  </label>
+                  <div className="flex items-center gap-1.5">
+                    {manualModelEntry && (
+                      <button
+                        type="button"
+                        onClick={() => setManualModelEntry(false)}
+                        className="text-[11px] text-[#58a6ff] hover:underline flex items-center gap-1 cursor-pointer"
+                      >
+                        <List className="w-3 h-3" />
+                        <span>Back to list</span>
+                      </button>
+                    )}
+                    {hasKey && !manualModelEntry && (
+                      <button
+                        type="button"
+                        onClick={() => fetchModelsForActive(currentProviderId, currentKey)}
+                        disabled={isLoadingModels}
+                        className="text-github-muted hover:text-white p-0.5 rounded transition-colors cursor-pointer disabled:opacity-40"
+                        title="Refresh model list"
+                        aria-label="Refresh model list"
+                      >
+                        <RefreshCw className={`w-3 h-3 ${isLoadingModels ? 'animate-spin' : ''}`} />
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                {isLoadingModels ? (
+                  <div className="space-y-2">
+                    <div className="flex items-center gap-2 p-2 rounded-lg bg-[#21262d]/50 border border-[#30363d] text-xs text-github-muted" role="status">
+                      <RefreshCw className="w-3.5 h-3.5 animate-spin text-[#58a6ff]" />
+                      <span>Loading models…</span>
+                    </div>
+                    <input
+                      id="llm-model-input"
+                      type="text"
+                      value={isAutoModel ? '' : currentModel}
+                      onChange={e => handleManualModelChange(e.target.value)}
+                      placeholder={`Default: ${defaultModel} (or enter custom model)`}
+                      className="w-full bg-[#0d1117] border border-[#30363d] focus:border-[#58a6ff] focus:ring-1 focus:ring-[#58a6ff] rounded-xl text-xs font-mono px-3 py-2 text-white placeholder:text-github-muted focus-visible:outline-none transition-colors"
+                    />
+                  </div>
+                ) : modelListError ? (
+                  <div className="space-y-2">
+                    <div className="flex items-center gap-2 p-2 rounded-lg bg-[#f85149]/10 border border-[#f85149]/30 text-xs text-[#ff7b72]" role="alert">
+                      <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                      <span>{modelListError}</span>
+                    </div>
+                    <input
+                      id="llm-model-input"
+                      type="text"
+                      value={isAutoModel ? '' : currentModel}
+                      onChange={e => handleManualModelChange(e.target.value)}
+                      placeholder={defaultModel}
+                      className="w-full bg-[#0d1117] border border-[#30363d] focus:border-[#58a6ff] focus:ring-1 focus:ring-[#58a6ff] rounded-xl text-xs font-mono px-3 py-2 text-white placeholder:text-github-muted focus-visible:outline-none transition-colors"
+                    />
+                  </div>
+                ) : manualModelEntry ? (
+                  <input
+                    id="llm-model-input"
+                    type="text"
+                    value={currentModel}
+                    onChange={e => handleManualModelChange(e.target.value)}
+                    placeholder={defaultModel}
+                    className="w-full bg-[#0d1117] border border-[#30363d] focus:border-[#58a6ff] focus:ring-1 focus:ring-[#58a6ff] rounded-xl text-xs font-mono px-3 py-2 text-white placeholder:text-github-muted focus-visible:outline-none transition-colors"
+                  />
+                ) : (
+                  <div className="relative">
+                    <select
+                      id="llm-model-picker"
+                      value={isAutoModel ? '__auto__' : currentModel}
+                      onChange={e => handleSelectModelChange(e.target.value)}
+                      className="w-full appearance-none bg-[#0d1117] border border-[#30363d] focus:border-[#58a6ff] focus:ring-1 focus:ring-[#58a6ff] rounded-xl text-xs font-mono px-3 py-2 pr-9 text-white placeholder:text-github-muted focus-visible:outline-none transition-colors cursor-pointer"
+                    >
+                      <option value="__auto__">Auto (recommended)</option>
+                      {sortedModels.map(m => (
+                        <option key={m} value={m}>
+                          {m === defaultModel ? `${m} (Recommended)` : m}
+                        </option>
+                      ))}
+                      <option value="__manual__">Enter manually…</option>
+                    </select>
+                    <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-github-muted pointer-events-none" />
+                  </div>
+                )}
+              </div>
+            </div>
+          </details>
 
           {/* Provider Security / Referrer Notice */}
           <div className="flex items-start gap-2.5 p-3 rounded-xl bg-[#21262d]/60 border border-[#30363d] text-[11px] text-github-muted leading-relaxed">

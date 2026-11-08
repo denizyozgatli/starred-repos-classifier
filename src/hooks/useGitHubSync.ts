@@ -11,7 +11,7 @@ import {
   mapToSyncError,
   resolveSyncFailure,
 } from '../lib/sync.ts';
-import { loadToken, saveToken, clearToken, loadLlmSettings } from '../lib/storage/settings.ts';
+import { loadToken, saveToken, clearToken, loadLlmSettings, saveLlmSettings, isModelAuto } from '../lib/storage/settings.ts';
 import { createDefaultStore, type KeyValueStore } from '../lib/storage/datasetStore.ts';
 import { getLLMProvider, type LLMProviderId } from '../core/llm-providers.ts';
 import { PROVIDER_DEFAULTS } from '../core/llm.ts';
@@ -32,6 +32,7 @@ export interface GitHubSyncState {
   llmErrors?: number;
   geminiStatus: GeminiSyncStatus;
   geminiErrors?: number;
+  modelFallbackNotice: string | null;
   dataset: DatasetEnvelope | null;
 }
 
@@ -50,6 +51,7 @@ export interface UseGitHubSyncReturn extends GitHubSyncState {
   clearTokenExpiredNotice: () => void;
   clearLlmNotice: () => void;
   clearGeminiNotice: () => void;
+  clearModelFallbackNotice: () => void;
   fetchLlmModels: (providerId: LLMProviderId, apiKey: string) => Promise<string[]>;
 }
 
@@ -64,6 +66,7 @@ export function useGitHubSync(options: UseGitHubSyncOptions = {}): UseGitHubSync
   const [listsUnavailable, setListsUnavailable] = useState<boolean>(false);
   const [isBackgroundRefreshing, setIsBackgroundRefreshing] = useState<boolean>(false);
   const [tokenExpiredNotice, setTokenExpiredNotice] = useState<string | null>(null);
+  const [modelFallbackNotice, setModelFallbackNotice] = useState<string | null>(null);
   const [llmStatus, setLlmStatus] = useState<LLMSyncStatus>('disabled');
   const [llmErrors, setLlmErrors] = useState<number | undefined>(undefined);
   const [dataset, setDataset] = useState<DatasetEnvelope | null>(null);
@@ -101,14 +104,26 @@ export function useGitHubSync(options: UseGitHubSyncOptions = {}): UseGitHubSync
           const activeProvider = settings.provider;
           const activeEntry = settings.providers[activeProvider];
           if (activeEntry?.apiKey?.trim()) {
+            const isAuto = isModelAuto(settings, activeProvider);
             effectiveLlm = {
               provider: activeProvider,
               apiKey: activeEntry.apiKey.trim(),
-              model: activeEntry.model || PROVIDER_DEFAULTS[activeProvider].defaultModel,
+              model: isAuto ? undefined : (activeEntry.model || PROVIDER_DEFAULTS[activeProvider].defaultModel),
               minIntervalMs:
                 (activeEntry.intervalSec !== null && activeEntry.intervalSec !== undefined
                   ? activeEntry.intervalSec
                   : PROVIDER_DEFAULTS[activeProvider].defaultIntervalSec) * 1000,
+              allowModelHeal: isAuto,
+              onModelFallback: (pickedModel: string) => {
+                const currentSettings = loadLlmSettings();
+                currentSettings.providers[activeProvider] = {
+                  ...currentSettings.providers[activeProvider],
+                  model: pickedModel,
+                  modelAuto: false,
+                };
+                saveLlmSettings(currentSettings);
+                setModelFallbackNotice(`Default model was retired; switched to ${pickedModel}.`);
+              },
             };
           }
         }
@@ -302,6 +317,7 @@ export function useGitHubSync(options: UseGitHubSyncOptions = {}): UseGitHubSync
     setViewerLogin(null);
     setListsUnavailable(false);
     setTokenExpiredNotice(null);
+    setModelFallbackNotice(null);
     setError(null);
     setStatus('idle');
   }, [cancel, store]);
@@ -314,8 +330,13 @@ export function useGitHubSync(options: UseGitHubSyncOptions = {}): UseGitHubSync
     setTokenExpiredNotice(null);
   }, []);
 
+  const clearModelFallbackNotice = useCallback((): void => {
+    setModelFallbackNotice(null);
+  }, []);
+
   const clearLlmNotice = useCallback((): void => {
     setLlmStatus('disabled');
+    setModelFallbackNotice(null);
   }, []);
 
   const clearGeminiNotice = clearLlmNotice;
@@ -334,6 +355,7 @@ export function useGitHubSync(options: UseGitHubSyncOptions = {}): UseGitHubSync
     llmErrors,
     geminiStatus: llmStatus,
     geminiErrors: llmErrors,
+    modelFallbackNotice,
     dataset,
     connect,
     refresh,
@@ -344,6 +366,7 @@ export function useGitHubSync(options: UseGitHubSyncOptions = {}): UseGitHubSync
     clearTokenExpiredNotice,
     clearLlmNotice,
     clearGeminiNotice,
+    clearModelFallbackNotice,
     fetchLlmModels,
   };
 }
