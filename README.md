@@ -1,10 +1,9 @@
 # GitHub Starred Repositories Classifier
 
-A privacy-first, client-side web dashboard and standalone CLI to fetch, categorize, and explore your GitHub starred repositories.
+A privacy-first, in-browser web dashboard and standalone CLI to fetch, categorize, and explore your GitHub starred repositories.
 
-The project consists of two decoupled components:
-- **CLI (`star-classifier`)**: Fetches your starred repositories, classifies them with a hybrid rule/LLM engine, and saves a local JSON dataset.
-- **Web Dashboard**: A static single-page application where you import your dataset to search, filter, and inspect your stars entirely in browser memory.
+- **Web Dashboard**: Connect directly with a GitHub Personal Access Token in the browser to fetch, classify (deterministic rules + optional Gemini AI), search, and filter your stars with IndexedDB local caching. JSON import remains available as a secondary fallback.
+- **CLI (`npm run cli`)**: A local Node CLI to run the ingestion and classification pipeline from a clone, producing a portable JSON dataset.
 
 [Live Demo](https://denizyozgatli.github.io/starred-repos-classifier/) · [GitHub Repository](https://github.com/denizyozgatli/starred-repos-classifier)
 
@@ -14,52 +13,98 @@ GitHub's default star list quickly becomes unmanageable as stars accumulate over
 
 ## Key Properties
 
-- **Privacy-First & Local**: No central backend, no database, and no server-side storage. Your stars stay on your machine.
-- **Decoupled Architecture**: The web dashboard does not make runtime calls to GitHub; all data is loaded via client-side JSON import.
-- **Hybrid Classification**: Fast, deterministic rules categorize repositories, with optional Google Gemini LLM fallback for ambiguous entries.
+- **Privacy-First & Local**: No central backend, no tracking, and no server-side database. Your token and stars stay in your browser.
+- **Direct Browser Connection**: The web dashboard connects directly to `api.github.com` via CORS using your personal access token; local JSON import remains available as a fallback.
+- **Hybrid Classification**: Fast, deterministic rules categorize repositories instantly, with optional in-browser Google Gemini LLM fallback for ambiguous entries.
+- **Offline & Cached**: Starred repositories and classifications are cached locally in browser IndexedDB with automatic background refresh (6-hour window).
 - **Static & Portable**: The dashboard compiles to pure static assets deployable to GitHub Pages, Vercel, Netlify, or any static host.
 - **Open Source**: MIT licensed and easy to run locally or self-host.
 
 ## Quick Start
 
-### 1. Generate Your Dataset
+### 1. Open the Dashboard
 
-Run the standalone CLI with your GitHub username:
+Visit the [Live Demo](https://denizyozgatli.github.io/starred-repos-classifier/) or run the app locally:
 
 ```bash
-npx star-classifier --user <your-github-username>
+git clone https://github.com/denizyozgatli/starred-repos-classifier.git
+cd starred-repos-classifier && npm install
+npm run dev
 ```
 
-This generates `./repos.json` in your current directory.
+### 2. Connect Your GitHub Account
 
-> **Authenticated Usage**: To include private star lists and avoid GitHub API rate limits, provide a token:
-> `npx star-classifier --token ghp_yourTokenHere`
+1. Click **Connect** on the dashboard.
+2. Paste your GitHub Personal Access Token (see [Create a GitHub Token](#create-a-github-token) below).
+3. The browser fetches your stars (+ Star Lists), classifies them with rules, and caches the dataset in IndexedDB.
 
-### 2. View in the Dashboard
+#### Alternative: Import a JSON File
 
-Open the [Web Dashboard](https://denizyozgatli.github.io/starred-repos-classifier/) (or run it locally with `npm run dev`), click **Import JSON**, and select your generated `repos.json`.
+If you prefer not to enter a token in the UI or already have a generated dataset, click **Import JSON** in the header or on the welcome screen to load a local `repos.json` file.
+
+### Create a GitHub Token
+
+To read your starred repositories directly from the browser, create a fine-grained personal access token:
+
+1. Go to [github.com/settings/personal-access-tokens/new](https://github.com/settings/personal-access-tokens/new).
+2. Set a name (e.g. `starred-repos-classifier`) and expiration.
+3. Under **Repository access**, select **Public repositories (read-only)**.
+4. Under **Account permissions**, locate **Starring** and select **Read-only**.
+5. Click **Generate token** and copy the value.
+
+> **Token Privacy & Security**:
+> - The token is stored **only in your browser** (`sessionStorage` by default, or `localStorage` if you check "Remember on this device").
+> - The token is sent **strictly to `api.github.com`** via direct HTTPS requests — never to any intermediate server or proxy.
+> - Classic personal access tokens (`ghp_`) are also supported; include the `repo` scope if you want to fetch private GitHub Star Lists.
+
+### Optional: Gemini AI Classification
+
+The classifier uses deterministic rules by default (zero external API keys required). If you want Gemini to automatically categorize ambiguous repositories that rules cannot resolve:
+
+1. Click the **Settings** (gear icon) button in the dashboard header.
+2. Enter your Google Gemini API key.
+3. Choose whether to remember the key on this device, select your preferred model (`gemini-3.8-flash` recommended), and adjust rate limiting if desired.
+4. Click **Re-classify 'Other' repos** to run Gemini against repositories currently categorized as `Other`.
+
+> **API Key Privacy & Security**:
+> - Like the GitHub token, your Gemini API key is stored only in your browser (`sessionStorage` or `localStorage`) and sent directly to Google's Gemini API (`generativelanguage.googleapis.com`).
+> - We recommend creating a restricted API key in Google AI Studio and restricting it by HTTP referrer when self-hosting.
 
 ## CLI
 
-The CLI fetches stars, normalizes metadata, and executes the classification pipeline locally.
+The project includes a standalone Node CLI for users who wish to fetch stars, run classifications offline, or automate datasets from the command line.
+
+Clone the repository and run:
 
 ```bash
-npx star-classifier [options]
+npm run cli -- [options]
 ```
 
 ### Options
 
 | Option | Flag | Description | Default |
 |---|---|---|---|
-| `--user <username>` | `-u` | GitHub username to fetch stars for | Authenticated user |
-| `--token <token>` | `-t` | GitHub Personal Access Token (or `GITHUB_TOKEN`) | None |
+| `--user <username>` | `-u` | GitHub username to fetch stars for (or `--username`) | Authenticated user |
+| `--token <token>` | `-t` | GitHub Personal Access Token (or `GITHUB_TOKEN` env var) | None |
 | `--output <path>` | `-o` | Destination JSON file path | `./repos.json` |
 | `--rule-only` | | Classify strictly with deterministic rules (skip LLM) | `false` |
-| `--gemini-key <key>` | | Google Gemini API key for fallback (or `GEMINI_API_KEY`) | None |
+| `--gemini-key <key>` | | Google Gemini API key for fallback (or `GEMINI_API_KEY` env var) | None |
 | `--cache <path>` | | Classification cache file path | `./.star-classifier-cache.json` |
 | `--no-cache` | | Disable reading and writing the classification cache | `false` |
 | `--help` | `-h` | Display usage instructions | |
 | `--version` | `-v` | Display version number | |
+
+Examples:
+
+```bash
+# Fetch and classify public stars with rules only
+npm run cli -- --user octocat --rule-only
+
+# Authenticated fetch with Star Lists and custom output file
+npm run cli -- --token your_token_here --output ./my-stars.json
+```
+
+The generated JSON dataset can be loaded into the dashboard at any time via the **Import JSON** button.
 
 ## How Classification Works
 
@@ -81,30 +126,40 @@ Each repository is assigned to one category:
 
 The web dashboard is an interactive client-side catalog:
 
+- **In-Browser GitHub Sync**: Directly fetches starred repositories and Star Lists from GitHub's REST and GraphQL APIs.
 - **Fuzzy Search**: Real-time typo-tolerant search across repository names, descriptions, and topics.
 - **Contextual Faceted Filters**: Multi-select categories, programming languages, and GitHub Star Lists with dynamic counts.
 - **Sorting**: Order by star count, recent updates, repository name, or search relevance.
 - **URL State**: Filter selections and queries are reflected in the URL for bookmarking and sharing.
 - **Client-Side Export**: Export filtered subsets or full datasets to JSON, RFC 4180 CSV (with UTF-8 BOM for Excel), or Markdown.
-- **In-Memory Import**: Datasets load directly into browser state without server uploads.
+- **Local Storage & IndexedDB**: Datasets and classification caches persist securely in IndexedDB with 6-hour auto-refresh.
+- **Fallback JSON Import**: Upload local datasets without connecting a GitHub token.
 
 ## Architecture
 
 ```text
-User Machine
-  │
-  ├── 1. Run CLI ──────────> GitHub REST/GraphQL API (fetch stars & lists)
-  │                                │
-  │                                ▼
-  │                       Rule & Gemini Engine
-  │                                │
-  │                                ▼
-  │                         ./repos.json (user-owned local file)
-  │                                │
-  └── 2. Import JSON ──────────────┘
-          │
-          ▼
-   Static Web Dashboard (100% in-browser state, zero backend calls)
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                              BROWSER RUNTIME                                │
+│                                                                             │
+│  GitHub Token ───► GitHub REST / GraphQL API ──► Starred Repos + Lists      │
+│  (UI / Storage)        (api.github.com)                       │             │
+│                                                               ▼             │
+│                                                     src/core/ Classifier    │
+│                                                     ├── Deterministic Rules │
+│  Gemini API Key ──► Google Gemini API (optional) ──►└── Gemini Fallback     │
+│  (UI / Storage)    (generativelanguage.googleapis)            │             │
+│                                                               ▼             │
+│                                                     IndexedDB Store & Cache │
+│                                                               │             │
+│                                                               ▼             │
+│  Local JSON File ──► Import JSON Fallback ──────► Interactive Web Dashboard │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                           SECONDARY CLI PATH (OPTIONAL)                     │
+│                                                                             │
+│  npm run cli ──► GitHub API ──► Rule & LLM Pipeline ──► Local repos.json    │
+└─────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ## Tech Stack
@@ -117,11 +172,17 @@ User Machine
 ## Project Structure
 
 ```text
-├── bin/        # Standalone CLI entrypoint (cli.ts)
-├── data/       # Benchmark & unseen test fixtures for evaluation
-├── scripts/    # Ingestion, classification, and evaluation scripts (lib/)
-├── src/        # Static React application (components/, lib/, types/)
-└── tests/      # Unit and integration test suites
+├── bin/            # Standalone CLI entrypoint (cli.ts)
+├── data/           # Benchmark & unseen test fixtures for evaluation
+├── scripts/        # CLI pipeline scripts & Node wrappers (lib/)
+├── src/            # Browser application
+│   ├── components/ # React UI components (Dashboard, Modals, Filters, Cards)
+│   ├── core/       # Browser-safe core engine (github, star-lists, classifier, llm, hash, dataset)
+│   ├── hooks/      # Custom React hooks (useGitHubSync)
+│   ├── lib/        # Pure utilities (sync engine, export, search, sorting, urlState)
+│   │   └── storage/# Storage adapters (settings, IndexedDB kv store)
+│   └── types/      # TypeScript type definitions and schema constants
+└── tests/          # Vitest unit and integration test suites
 ```
 
 ## Local Development
@@ -133,17 +194,18 @@ cd starred-repos-classifier && npm install
 
 npm run dev                    # Start local development server
 npm run cli -- --user octocat  # Run CLI locally
-npm run build                  # Build web application and CLI bundle
+npm run build                  # Build web application to dist/
+npm run preview                # Preview production build locally
 ```
 
 ### Environment Configuration (Optional)
 
-Create a `.env` file to supply default credentials for local runs:
+Create a `.env` file to supply default credentials for local CLI runs (the web app needs no `.env` file):
 
 ```env
 GITHUB_USERNAME=your-username
-GITHUB_TOKEN=ghp_your_personal_access_token
-GEMINI_API_KEY=your_gemini_api_key
+GITHUB_TOKEN=your_github_token_here
+GEMINI_API_KEY=your_gemini_api_key_here
 ```
 
 ## Testing
@@ -164,14 +226,14 @@ The dashboard compiles to static HTML, CSS, and JavaScript in `dist/`. Deploy th
 - **Vercel / Netlify / Cloudflare Pages**: Set build command to `npm run build` and publish directory to `dist`.
 - **Docker / Nginx**: Serve `dist/` directly with Nginx or Caddy.
 
-Each user generates their own `repos.json` locally and imports it into the hosted dashboard.
+Users can connect directly to GitHub from their own browser on your deployed instance, or import a pre-generated `repos.json` dataset.
 
 ## Privacy & Data Ownership
 
-- **Credentials**: Your GitHub token and Gemini API key remain in your local environment.
-- **Direct Requests**: The CLI communicates directly with GitHub and Google APIs without telemetry or proxies.
-- **Local Datasets**: Generated JSON files are stored on your machine and ignored by Git.
-- **In-Memory Execution**: The web dashboard does not upload files or transmit imported data across the network.
+- **Credentials**: Your GitHub token and Gemini API key remain in your browser storage (`sessionStorage` by default, or `localStorage` if opted in). They are never sent to any server other than GitHub and Google.
+- **Direct Requests**: Network calls are made directly from your browser to `api.github.com` and `generativelanguage.googleapis.com` without intermediary backend servers or telemetry.
+- **Local Datasets**: Repositories and classifications are stored locally in IndexedDB in your browser.
+- **In-Memory & Local Execution**: Uploaded files and imported datasets are processed purely in client-side memory.
 - **No Bundled Data**: The repository ships with zero personal starred datasets.
 
 ## License
