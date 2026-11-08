@@ -389,11 +389,13 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     if (onReclassifyOther) {
       const activeEntry = settings.providers[currentProviderId];
       const autoMode = isModelAuto(settings, currentProviderId);
+      const isAutoInterval = activeEntry.intervalSec === null || activeEntry.intervalSec === undefined;
       const config: LLMSyncOptions = {
         provider: currentProviderId,
         apiKey: activeEntry.apiKey.trim(),
         model: autoMode ? undefined : (activeEntry.model || PROVIDER_DEFAULTS[currentProviderId].defaultModel),
-        minIntervalSec: activeEntry.intervalSec ?? undefined,
+        adaptive: isAutoInterval,
+        minIntervalSec: isAutoInterval ? PROVIDER_DEFAULTS[currentProviderId].defaultIntervalSec : (activeEntry.intervalSec ?? undefined),
         allowModelHeal: autoMode,
       };
       await onReclassifyOther(config);

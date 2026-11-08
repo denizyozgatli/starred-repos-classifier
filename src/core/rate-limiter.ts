@@ -23,6 +23,10 @@ export class RateLimiter {
     return this.minIntervalMs;
   }
 
+  setMinIntervalMs(ms: number): void {
+    this.minIntervalMs = Math.max(0, ms);
+  }
+
   /**
    * Enqueues an execution and waits until at least minIntervalMs has elapsed
    * since the previous request was dispatched. Respects optional AbortSignal.

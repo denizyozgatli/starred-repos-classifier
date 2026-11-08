@@ -105,14 +105,16 @@ export function useGitHubSync(options: UseGitHubSyncOptions = {}): UseGitHubSync
           const activeEntry = settings.providers[activeProvider];
           if (activeEntry?.apiKey?.trim()) {
             const isAuto = isModelAuto(settings, activeProvider);
+            const isAutoInterval = activeEntry.intervalSec === null || activeEntry.intervalSec === undefined;
             effectiveLlm = {
               provider: activeProvider,
               apiKey: activeEntry.apiKey.trim(),
               model: isAuto ? undefined : (activeEntry.model || PROVIDER_DEFAULTS[activeProvider].defaultModel),
+              adaptive: isAutoInterval,
               minIntervalMs:
-                (activeEntry.intervalSec !== null && activeEntry.intervalSec !== undefined
-                  ? activeEntry.intervalSec
-                  : PROVIDER_DEFAULTS[activeProvider].defaultIntervalSec) * 1000,
+                (isAutoInterval
+                  ? PROVIDER_DEFAULTS[activeProvider].defaultIntervalSec
+                  : (activeEntry.intervalSec ?? PROVIDER_DEFAULTS[activeProvider].defaultIntervalSec)) * 1000,
               allowModelHeal: isAuto,
               onModelFallback: (pickedModel: string) => {
                 const currentSettings = loadLlmSettings();

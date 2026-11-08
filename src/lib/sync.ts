@@ -137,6 +137,7 @@ export interface LLMSyncOptions {
   model?: string;
   minIntervalSec?: number;
   minIntervalMs?: number;
+  adaptive?: boolean;
   allowModelHeal?: boolean;
   onModelFallback?: (pickedModel: string) => void;
 }
@@ -313,6 +314,7 @@ export async function syncStarredRepos(options: SyncStarredReposOptions): Promis
         apiKey: effectiveLlm.apiKey.trim(),
         model: effectiveLlm.model,
         minIntervalMs,
+        adaptive: effectiveLlm.adaptive,
         signal,
         allowModelHeal: effectiveLlm.allowModelHeal,
         onModelFallback: effectiveLlm.onModelFallback,

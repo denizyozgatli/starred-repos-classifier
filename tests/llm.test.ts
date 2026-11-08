@@ -292,6 +292,204 @@ describe('LLM & Multi-Provider Core (src/core/llm.ts & src/core/llm-providers.ts
 
       expect(attempts).toBe(1);
     });
+
+    it('RateLimiter setMinIntervalMs modifies interval and clamps negative numbers', () => {
+      const limiter = new RateLimiter({ minIntervalMs: 3000 });
+      expect(limiter.getMinIntervalMs()).toBe(3000);
+      limiter.setMinIntervalMs(1500);
+      expect(limiter.getMinIntervalMs()).toBe(1500);
+      limiter.setMinIntervalMs(-100);
+      expect(limiter.getMinIntervalMs()).toBe(0);
+    });
+  });
+
+  describe('Adaptive Request Interval (Auto mode)', () => {
+    const originalFetch = globalThis.fetch;
+
+    afterEach(() => {
+      globalThis.fetch = originalFetch;
+    });
+
+    const sampleRepo = {
+      id: 1,
+      name: 'react',
+      fullName: 'facebook/react',
+      owner: 'facebook',
+      description: 'A declarative, efficient, and flexible JavaScript library for building user interfaces.',
+      topics: ['react', 'ui', 'frontend'],
+      language: 'JavaScript',
+      stars: 200000,
+      url: 'https://github.com/facebook/react',
+      updatedAt: '2026-03-01T00:00:00Z',
+      archived: false,
+      fork: false,
+    };
+
+    it('decreases interval from 4000ms down to 1500ms floor by 500ms on consecutive successes', async () => {
+      globalThis.fetch = vi.fn(async () => {
+        return new Response(
+          JSON.stringify({
+            choices: [{ message: { content: JSON.stringify({ category: 'Web Frontend', confidence: 0.95 }) } }],
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } }
+        );
+      });
+
+      const limiter = new RateLimiter({ minIntervalMs: 4000, sleepFn: async () => {} });
+      const classifier = createLLMClassifier({
+        provider: 'openai',
+        apiKey: 'sk-test-key',
+        minIntervalMs: 4000,
+        adaptive: true,
+        rateLimiter: limiter,
+        sleepFn: async () => {},
+      });
+
+      expect(limiter.getMinIntervalMs()).toBe(4000);
+
+      // Call 1 -> 3500ms
+      await classifier(sampleRepo);
+      expect(limiter.getMinIntervalMs()).toBe(3500);
+
+      // Call 2 -> 3000ms
+      await classifier(sampleRepo);
+      expect(limiter.getMinIntervalMs()).toBe(3000);
+
+      // Call 3 -> 2500ms
+      await classifier(sampleRepo);
+      expect(limiter.getMinIntervalMs()).toBe(2500);
+
+      // Call 4 -> 2000ms
+      await classifier(sampleRepo);
+      expect(limiter.getMinIntervalMs()).toBe(2000);
+
+      // Call 5 -> 1500ms (floor)
+      await classifier(sampleRepo);
+      expect(limiter.getMinIntervalMs()).toBe(1500);
+
+      // Call 6 -> stays at 1500ms floor
+      await classifier(sampleRepo);
+      expect(limiter.getMinIntervalMs()).toBe(1500);
+    });
+
+    it('resets interval to starting value on 429 and notifies onThrottle with retryAfterMs', async () => {
+      let throttledWaitMs: number | null = null;
+      let attempt = 0;
+
+      globalThis.fetch = vi.fn(async () => {
+        attempt++;
+        if (attempt === 1) {
+          // First attempt succeeds
+          return new Response(
+            JSON.stringify({
+              choices: [{ message: { content: JSON.stringify({ category: 'Web Frontend', confidence: 0.95 }) } }],
+            }),
+            { status: 200, headers: { 'Content-Type': 'application/json' } }
+          );
+        }
+        if (attempt === 2) {
+          // Second attempt hits 429 with retry-after: 8
+          return new Response(
+            JSON.stringify({ error: { message: 'Rate limit reached' } }),
+            { status: 429, headers: { 'Content-Type': 'application/json', 'retry-after': '8' } }
+          );
+        }
+        // Third attempt (retry after 429) succeeds
+        return new Response(
+          JSON.stringify({
+            choices: [{ message: { content: JSON.stringify({ category: 'Web Frontend', confidence: 0.95 }) } }],
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } }
+        );
+      });
+
+      const limiter = new RateLimiter({ minIntervalMs: 4000, sleepFn: async () => {} });
+      const classifier = createLLMClassifier({
+        provider: 'openai',
+        apiKey: 'sk-test-key',
+        minIntervalMs: 4000,
+        adaptive: true,
+        rateLimiter: limiter,
+        sleepFn: async () => {},
+        onThrottle: (waitMs: number) => {
+          throttledWaitMs = waitMs;
+        },
+      });
+
+      // 1. Success -> interval drops to 3500
+      await classifier(sampleRepo);
+      expect(limiter.getMinIntervalMs()).toBe(3500);
+
+      // 2. 429 occurs on next call -> triggers onThrottle(8000), resets to 4000, retry succeeds -> 3500
+      await classifier(sampleRepo);
+      expect(throttledWaitMs).toBe(8000);
+      // After retry succeeds, interval decreases from starting 4000 to 3500
+      expect(limiter.getMinIntervalMs()).toBe(3500);
+    });
+
+    it('defaults onThrottle to 15000ms when 429 response provides no retry-after header', async () => {
+      let throttledWaitMs: number | null = null;
+      let attempt = 0;
+
+      globalThis.fetch = vi.fn(async () => {
+        attempt++;
+        if (attempt === 1) {
+          return new Response(
+            JSON.stringify({ error: { message: 'Too many requests' } }),
+            { status: 429, headers: { 'Content-Type': 'application/json' } }
+          );
+        }
+        return new Response(
+          JSON.stringify({
+            choices: [{ message: { content: JSON.stringify({ category: 'Web Frontend', confidence: 0.95 }) } }],
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } }
+        );
+      });
+
+      const limiter = new RateLimiter({ minIntervalMs: 4000, sleepFn: async () => {} });
+      const classifier = createLLMClassifier({
+        provider: 'openai',
+        apiKey: 'sk-test-key',
+        minIntervalMs: 4000,
+        adaptive: true,
+        rateLimiter: limiter,
+        sleepFn: async () => {},
+        onThrottle: (waitMs: number) => {
+          throttledWaitMs = waitMs;
+        },
+      });
+
+      await classifier(sampleRepo);
+      expect(throttledWaitMs).toBe(15000);
+    });
+
+    it('manual mode (adaptive false or omitted) leaves rate limiter interval unchanged', async () => {
+      globalThis.fetch = vi.fn(async () => {
+        return new Response(
+          JSON.stringify({
+            choices: [{ message: { content: JSON.stringify({ category: 'Web Frontend', confidence: 0.95 }) } }],
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } }
+        );
+      });
+
+      const limiter = new RateLimiter({ minIntervalMs: 3000, sleepFn: async () => {} });
+      const classifier = createLLMClassifier({
+        provider: 'openai',
+        apiKey: 'sk-test-key',
+        minIntervalMs: 3000,
+        adaptive: false,
+        rateLimiter: limiter,
+        sleepFn: async () => {},
+      });
+
+      await classifier(sampleRepo);
+      expect(limiter.getMinIntervalMs()).toBe(3000);
+
+      await classifier(sampleRepo);
+      expect(limiter.getMinIntervalMs()).toBe(3000);
+    });
   });
 
   describe('Provider Wire Formats & Happy Paths (Fetch-based)', () => {

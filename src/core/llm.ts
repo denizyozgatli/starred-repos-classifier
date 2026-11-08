@@ -4,6 +4,8 @@ import type { ClassificationResult } from './classifier.ts';
 import {
   RateLimiter,
   executeWithRetry,
+  extractRetryDelayMs,
+  isRateLimitError,
 } from './rate-limiter.ts';
 import {
   type LLMProviderId,
@@ -129,6 +131,8 @@ export interface LLMClassifierOptions {
   apiKey: string;
   model?: string;
   minIntervalMs?: number;
+  adaptive?: boolean;
+  onThrottle?: (waitMs: number) => void;
   signal?: AbortSignal;
   sleepFn?: (ms: number) => Promise<void>;
   maxRetries?: number;
@@ -146,6 +150,8 @@ export function createLLMClassifier(
   const {
     apiKey,
     minIntervalMs = providerDef.defaultIntervalSec * 1000,
+    adaptive = false,
+    onThrottle,
     signal,
     sleepFn,
     maxRetries = 2,
@@ -156,7 +162,13 @@ export function createLLMClassifier(
   let activeModel = options.model || providerDef.defaultModel;
   let hasHealed = false;
 
-  const rateLimiter = options.rateLimiter ?? new RateLimiter({ minIntervalMs });
+  const startInterval = minIntervalMs;
+  let currentInterval = startInterval;
+
+  const rateLimiter = options.rateLimiter ?? new RateLimiter({ minIntervalMs: currentInterval });
+  if (adaptive) {
+    rateLimiter.setMinIntervalMs(currentInterval);
+  }
 
   return async (repo: NormalizedRepo): Promise<ClassificationResult> => {
     if (signal?.aborted) {
@@ -176,12 +188,30 @@ export function createLLMClassifier(
             throw signal.reason || err;
           }
 
-          return await providerDef.classify({
-            apiKey,
-            model: modelToUse,
-            prompt,
-            signal,
-          });
+          try {
+            return await providerDef.classify({
+              apiKey,
+              model: modelToUse,
+              prompt,
+              signal,
+            });
+          } catch (err) {
+            if (isRateLimitError(err) || err instanceof LLMRateLimitError) {
+              const retryAfterSec =
+                typeof (err as { retryAfterSec?: number }).retryAfterSec === 'number' &&
+                (err as { retryAfterSec?: number }).retryAfterSec! > 0
+                  ? (err as { retryAfterSec?: number }).retryAfterSec!
+                  : undefined;
+              const serverDelayMs = extractRetryDelayMs(err);
+              const waitMs = retryAfterSec ? retryAfterSec * 1000 : (serverDelayMs ?? 15000);
+              onThrottle?.(waitMs);
+              if (adaptive) {
+                currentInterval = startInterval;
+                rateLimiter.setMinIntervalMs(currentInterval);
+              }
+            }
+            throw err;
+          }
         },
         {
           rateLimiter,
@@ -233,6 +263,11 @@ export function createLLMClassifier(
       } else {
         throw err;
       }
+    }
+
+    if (adaptive && currentInterval > 1500) {
+      currentInterval = Math.max(1500, currentInterval - 500);
+      rateLimiter.setMinIntervalMs(currentInterval);
     }
 
     const parsed = parseClassificationResponse(responseText);
