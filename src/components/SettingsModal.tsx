@@ -28,7 +28,7 @@ import {
   LLM_PROVIDERS,
   getLLMProvider,
 } from '../core/llm-providers.ts';
-import { PROVIDER_DEFAULTS } from '../core/llm.ts';
+import { PROVIDER_DEFAULTS, LLMAuthError } from '../core/llm.ts';
 import type { LLMSyncOptions } from '../lib/sync.ts';
 
 export interface SettingsModalProps {
@@ -41,6 +41,7 @@ export interface SettingsModalProps {
   initialModelList?: string[];
   initialIsLoadingModels?: boolean;
   initialModelListError?: string | null;
+  initialModelListErrorDetail?: string | null;
   initialManualModelEntry?: boolean;
 }
 
@@ -99,6 +100,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   initialModelList,
   initialIsLoadingModels,
   initialModelListError,
+  initialModelListErrorDetail,
   initialManualModelEntry,
 }) => {
   const [settings, setSettings] = useState<LlmSettings>(() => createDefaultLlmSettings());
@@ -110,6 +112,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [modelList, setModelList] = useState<string[] | null>(initialModelList ?? null);
   const [isLoadingModels, setIsLoadingModels] = useState<boolean>(initialIsLoadingModels ?? false);
   const [modelListError, setModelListError] = useState<string | null>(initialModelListError ?? null);
+  const [modelListErrorDetail, setModelListErrorDetail] = useState<string | null>(initialModelListErrorDetail ?? null);
   const [manualModelEntry, setManualModelEntry] = useState<boolean>(initialManualModelEntry ?? false);
 
   const modalRef = useRef<HTMLDivElement>(null);
@@ -139,17 +142,31 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       if (!trimmed) {
         setModelList(null);
         setModelListError(null);
+        setModelListErrorDetail(null);
         return;
       }
 
       setIsLoadingModels(true);
       setModelListError(null);
+      setModelListErrorDetail(null);
+      const providerLabel = getLLMProvider(providerId).label;
       try {
         const fetcher = fetchLlmModels ?? ((p, k) => getLLMProvider(p).listModels({ apiKey: k }));
         const models = await fetcher(providerId, trimmed);
         setModelList(models);
-      } catch {
+      } catch (err: unknown) {
         setModelListError('Could not load model list — enter the model id manually.');
+        const isAuth =
+          err instanceof LLMAuthError ||
+          (err instanceof Error && err.name === 'LLMAuthError') ||
+          (typeof err === 'object' && err !== null && (err as { status?: number }).status === 401);
+        if (isAuth) {
+          setModelListErrorDetail(`Key was rejected by ${providerLabel} — check the key.`);
+        } else {
+          const raw = err instanceof Error ? err.message : String(err);
+          const truncated = raw.length > 120 ? raw.slice(0, 117) + '...' : raw;
+          setModelListErrorDetail(`${providerLabel} said: ${truncated}`);
+        }
       } finally {
         setIsLoadingModels(false);
       }
@@ -174,6 +191,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       if (initialModelListError === undefined) {
         setModelListError(null);
       }
+      if (initialModelListErrorDetail === undefined) {
+        setModelListErrorDetail(null);
+      }
       if (initialManualModelEntry === undefined) {
         setManualModelEntry(false);
       }
@@ -183,7 +203,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         fetchModelsForActive(loaded.provider, activeEntry.apiKey.trim());
       }
     }
-  }, [isOpen, fetchModelsForActive, initialModelList, initialIsLoadingModels, initialModelListError, initialManualModelEntry]);
+  }, [isOpen, fetchModelsForActive, initialModelList, initialIsLoadingModels, initialModelListError, initialModelListErrorDetail, initialManualModelEntry]);
 
   // Handle ESC key
   useEffect(() => {
@@ -207,6 +227,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     setDetectHint(null);
     setModelList(null);
     setModelListError(null);
+    setModelListErrorDetail(null);
     setManualModelEntry(false);
 
     const entry = settings.providers[newProvider];
@@ -621,9 +642,26 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   </div>
                 ) : modelListError ? (
                   <div className="space-y-2">
-                    <div className="flex items-center gap-2 p-2 rounded-lg bg-[#f85149]/10 border border-[#f85149]/30 text-xs text-[#ff7b72]" role="alert">
-                      <AlertCircle className="w-3.5 h-3.5 shrink-0" />
-                      <span>{modelListError}</span>
+                    <div className="p-2.5 rounded-lg bg-[#f85149]/10 border border-[#f85149]/30 text-xs text-[#ff7b72] space-y-1.5" role="alert">
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="flex items-center gap-1.5 font-medium">
+                          <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                          <span>{modelListError}</span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => fetchModelsForActive(currentProviderId, currentKey)}
+                          disabled={isLoadingModels}
+                          className="shrink-0 text-[11px] font-semibold text-[#58a6ff] hover:underline cursor-pointer disabled:opacity-40"
+                        >
+                          Retry
+                        </button>
+                      </div>
+                      {modelListErrorDetail && (
+                        <p className="text-[11px] text-github-muted pl-5 break-words">
+                          {modelListErrorDetail}
+                        </p>
+                      )}
                     </div>
                     <input
                       id="llm-model-input"

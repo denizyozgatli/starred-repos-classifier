@@ -185,7 +185,16 @@ function handleUniformError(
     errMsg = json.message;
   }
   if (!errMsg) {
-    errMsg = bodyText.slice(0, 300) || `HTTP ${status}`;
+    errMsg = bodyText || `HTTP ${status}`;
+  }
+
+  // Format single line, max ~140 chars, with status + message
+  let sanitizedMsg = errMsg.replace(/\s+/g, ' ').trim();
+  let formattedMsg = sanitizedMsg.includes(String(status))
+    ? sanitizedMsg
+    : `${status} ${sanitizedMsg}`;
+  if (formattedMsg.length > 140) {
+    formattedMsg = formattedMsg.slice(0, 137) + '...';
   }
 
   // Check rate limit / quota exhaustion
@@ -202,16 +211,16 @@ function handleUniformError(
       (json.error as Record<string, unknown>)?.code === 'insufficient_quota');
 
   if (status === 429 || isGoogleExhausted || isOpenAIQuota) {
-    throw new LLMRateLimitError(provider, errMsg, { retryAfterSec, status });
+    throw new LLMRateLimitError(provider, formattedMsg, { retryAfterSec, status });
   }
 
   // Auth errors (401 or non-rate-limit 403)
   if (status === 401 || status === 403) {
-    throw new LLMAuthError(provider, errMsg || `Authentication failed for ${provider}. Check your API key.`, { status });
+    throw new LLMAuthError(provider, formattedMsg, { status });
   }
 
   // Other HTTP errors
-  throw new LLMError(provider, errMsg || `HTTP ${status}`, { status, code: errCode });
+  throw new LLMError(provider, formattedMsg, { status, code: errCode });
 }
 
 export const openaiProvider: LLMProviderDef = {
@@ -435,8 +444,8 @@ export const anthropicProvider: LLMProviderDef = {
 export const googleProvider: LLMProviderDef = {
   id: 'google',
   label: 'Google Gemini',
-  keyPattern: /^AIza/,
-  keyPlaceholder: 'AIza...',
+  keyPattern: /^(?:AIza|AQ\.)/,
+  keyPlaceholder: 'AQ....',
   defaultModel: 'gemini-3.8-flash',
   defaultIntervalSec: 4,
   pickPreferredModel(models: string[]): string | null {
@@ -444,8 +453,18 @@ export const googleProvider: LLMProviderDef = {
     return flash || null;
   },
   async listModels({ apiKey, signal }) {
-    const url = `https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(apiKey.trim())}`;
-    const res = await safeFetch(url, { signal }, 'google', apiKey);
+    const url = 'https://generativelanguage.googleapis.com/v1beta/models';
+    const res = await safeFetch(
+      url,
+      {
+        headers: {
+          'x-goog-api-key': apiKey.trim(),
+        },
+        signal,
+      },
+      'google',
+      apiKey
+    );
 
     if (!res.ok) {
       const { text, json } = await parseErrorBody(res, apiKey);
@@ -461,12 +480,13 @@ export const googleProvider: LLMProviderDef = {
       .filter(Boolean);
   },
   async classify({ apiKey, model, prompt, signal }) {
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey.trim())}`;
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`;
     const res = await safeFetch(
       url,
       {
         method: 'POST',
         headers: {
+          'x-goog-api-key': apiKey.trim(),
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({

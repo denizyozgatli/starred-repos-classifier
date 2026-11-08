@@ -86,9 +86,22 @@ describe('LLM & Multi-Provider Core (src/core/llm.ts & src/core/llm-providers.ts
       expect(LLM_PROVIDERS.anthropic.keyPattern.test('sk-openai-123')).toBe(false);
 
       expect(LLM_PROVIDERS.google.keyPattern.test('AIzaSyD-12345')).toBe(true);
+      expect(LLM_PROVIDERS.google.keyPattern.test('AQ.1234567890abcdef')).toBe(true);
+      expect(LLM_PROVIDERS.google.keyPlaceholder).toBe('AQ....');
       expect(LLM_PROVIDERS.google.keyPattern.test('sk-12345')).toBe(false);
 
       expect(LLM_PROVIDERS.deepseek.keyPattern.test('sk-deepseek-123')).toBe(true);
+    });
+
+    it('detectProvider correctly identifies Google AQ./AIza, Anthropic, OpenAI project keys, and returns null for bare sk-', () => {
+      expect(detectProvider('AQ.abc123xyz')).toBe('google');
+      expect(detectProvider('AIzaSyD-12345')).toBe('google');
+      expect(detectProvider('sk-proj-1234567890')).toBe('openai');
+      expect(detectProvider('sk-svcacct-1234567890')).toBe('openai');
+      expect(detectProvider('sk-admin-1234567890')).toBe('openai');
+      expect(detectProvider('sk-ant-api03-1234567890')).toBe('anthropic');
+      expect(detectProvider('sk-1234567890abcdef1234567890abcdef')).toBeNull();
+      expect(detectProvider('')).toBeNull();
     });
 
     it('implements pickPreferredModel for all 4 providers', () => {
@@ -488,12 +501,14 @@ describe('LLM & Multi-Provider Core (src/core/llm.ts & src/core/llm-providers.ts
       expect(requestedBody?.response_format).toBeUndefined();
     });
 
-    it('google: posts to /models/{model}:generateContent with apiKey query param', async () => {
+    it('google: posts to /models/{model}:generateContent with x-goog-api-key header and no key query param', async () => {
       let requestedUrl = '';
+      let requestedHeaders: Headers | undefined;
       let requestedBody: Record<string, unknown> | undefined;
 
       globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
         requestedUrl = String(input);
+        requestedHeaders = new Headers(init?.headers);
         requestedBody = JSON.parse(String(init?.body));
         return new Response(
           JSON.stringify({
@@ -511,7 +526,7 @@ describe('LLM & Multi-Provider Core (src/core/llm.ts & src/core/llm-providers.ts
 
       const classifier = createLLMClassifier({
         provider: 'google',
-        apiKey: 'AIzaSyFakeKey123',
+        apiKey: 'AQ.FakeGoogleKey123',
         model: 'gemini-3.8-flash',
         minIntervalMs: 0,
       });
@@ -519,8 +534,10 @@ describe('LLM & Multi-Provider Core (src/core/llm.ts & src/core/llm-providers.ts
       const result = await classifier(sampleRepo);
       expect(result.category).toBe('DevOps / Infra');
       expect(requestedUrl).toBe(
-        'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key=AIzaSyFakeKey123'
+        'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent'
       );
+      expect(requestedUrl).not.toContain('key=');
+      expect(requestedHeaders?.get('x-goog-api-key')).toBe('AQ.FakeGoogleKey123');
       expect(requestedBody?.generationConfig).toEqual({
         temperature: 0,
         responseMimeType: 'application/json',
@@ -656,6 +673,35 @@ describe('LLM & Multi-Provider Core (src/core/llm.ts & src/core/llm-providers.ts
         return true;
       });
     });
+
+    it('formats uniform error message with status + reason on a single line (max ~140 chars) and never leaks the key', async () => {
+      const secret = 'AQ.SecretGoogleKeyXYZ';
+      globalThis.fetch = vi.fn(async () => {
+        return new Response(
+          JSON.stringify({
+            error: {
+              code: 403,
+              message: `Method doesn't allow unregistered callers (key: ${secret})\nPlease provide a valid API key.`,
+              status: 'PERMISSION_DENIED',
+            },
+          }),
+          { status: 403, headers: { 'Content-Type': 'application/json' } }
+        );
+      });
+
+      await expect(
+        LLM_PROVIDERS.google.listModels({ apiKey: secret })
+      ).rejects.toSatisfy((err: unknown) => {
+        expect(err).toBeInstanceOf(LLMAuthError);
+        const msg = (err as Error).message;
+        expect(msg).toContain('403');
+        expect(msg).toContain('[REDACTED]');
+        expect(msg).not.toContain(secret);
+        expect(msg).not.toContain('\n');
+        expect(msg.length).toBeLessThanOrEqual(140);
+        return true;
+      });
+    });
   });
 
   describe('listModels Filtering per Provider', () => {
@@ -691,8 +737,13 @@ describe('LLM & Multi-Provider Core (src/core/llm.ts & src/core/llm-providers.ts
       expect(models).not.toContain('text-embedding-3-small');
     });
 
-    it('google: filters for supportedGenerationMethods containing generateContent and strips models/ prefix', async () => {
-      globalThis.fetch = vi.fn(async () => {
+    it('google: filters for supportedGenerationMethods containing generateContent and strips models/ prefix using header auth without key in URL', async () => {
+      let requestedUrl = '';
+      let requestedHeaders: Headers | undefined;
+
+      globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        requestedUrl = String(input);
+        requestedHeaders = new Headers(init?.headers);
         return new Response(
           JSON.stringify({
             models: [
@@ -705,9 +756,12 @@ describe('LLM & Multi-Provider Core (src/core/llm.ts & src/core/llm-providers.ts
         );
       });
 
-      const models = await LLM_PROVIDERS.google.listModels({ apiKey: 'AIza-test' });
+      const models = await LLM_PROVIDERS.google.listModels({ apiKey: 'AQ.TestKey-123' });
       expect(models).toEqual(['gemini-2.5-flash', 'gemini-3.8-flash']);
       expect(models).not.toContain('text-embedding-004');
+      expect(requestedUrl).toBe('https://generativelanguage.googleapis.com/v1beta/models');
+      expect(requestedUrl).not.toContain('key=');
+      expect(requestedHeaders?.get('x-goog-api-key')).toBe('AQ.TestKey-123');
     });
 
     it('deepseek: returns model list from /models', async () => {
@@ -755,7 +809,8 @@ describe('LLM & Multi-Provider Core (src/core/llm.ts & src/core/llm-providers.ts
     });
 
     describe('detectProvider', () => {
-      it('detects google from AIza prefix', () => {
+      it('detects google from AQ. or AIza prefix', () => {
+        expect(detectProvider('AQ.1234567890abcdef')).toBe('google');
         expect(detectProvider('AIzaSyD-1234567890abcdef')).toBe('google');
       });
 
@@ -763,8 +818,11 @@ describe('LLM & Multi-Provider Core (src/core/llm.ts & src/core/llm-providers.ts
         expect(detectProvider('sk-ant-api03-abcdef12345')).toBe('anthropic');
       });
 
-      it('returns null for ambiguous sk- keys (OpenAI vs DeepSeek)', () => {
-        expect(detectProvider('sk-proj-1234567890')).toBeNull();
+      it('detects openai from sk-proj- prefix', () => {
+        expect(detectProvider('sk-proj-1234567890')).toBe('openai');
+      });
+
+      it('returns null for ambiguous bare sk- keys (OpenAI legacy vs DeepSeek)', () => {
         expect(detectProvider('sk-deepseek-12345')).toBeNull();
         expect(detectProvider('sk-12345')).toBeNull();
       });

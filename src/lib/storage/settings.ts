@@ -1,5 +1,4 @@
 import type { LLMProviderId } from '../../core/llm-providers.ts';
-import { LLM_PROVIDERS } from '../../core/llm-providers.ts';
 import { PROVIDER_DEFAULTS } from '../../core/llm.ts';
 
 const TOKEN_STORAGE_KEY = 'starred_repos_github_token';
@@ -199,16 +198,15 @@ export function setModelAuto(
 
 /**
  * Detects LLM provider based on API key prefix/pattern.
- * For 'sk-' keys matching both OpenAI and DeepSeek, returns null and lets UI ask.
+ * Recognizes Google (/^(?:AIza|AQ\.)/), Anthropic (/^sk-ant-/), and OpenAI-specific prefixes (/^sk-(?:proj|svcacct|admin)-/).
+ * For bare 'sk-' keys matching both OpenAI legacy and DeepSeek, returns null and lets UI ask.
  */
 export function detectProvider(apiKey: string): LLMProviderId | null {
   const trimmed = apiKey.trim();
   if (!trimmed) return null;
-
-  const matching = Object.values(LLM_PROVIDERS).filter(p => p.keyPattern.test(trimmed));
-  if (matching.length === 1) {
-    return matching[0].id;
-  }
+  if (/^(?:AIza|AQ\.)/.test(trimmed)) return 'google';
+  if (/^sk-ant-/.test(trimmed)) return 'anthropic';
+  if (/^sk-(?:proj|svcacct|admin)-/.test(trimmed)) return 'openai';
   return null;
 }
 

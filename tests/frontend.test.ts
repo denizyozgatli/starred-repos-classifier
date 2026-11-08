@@ -960,16 +960,19 @@ describe('Frontend Logic', () => {
       expect(html).not.toContain('id="llm-model-picker"');
     });
 
-    it('A1: error state renders error text and manual-entry input', () => {
+    it('A1: error state renders error text, detail line, Retry button, and manual-entry input', () => {
       const html = renderToString(
         React.createElement(SettingsModal, {
           isOpen: true,
           onClose: () => {},
           hasCachedData: true,
           initialModelListError: 'Could not load model list — enter the model id manually.',
+          initialModelListErrorDetail: 'Google Gemini said: 403 Method not allowed',
         })
       );
       expect(html).toContain('Could not load model list — enter the model id manually.');
+      expect(html).toContain('Google Gemini said: 403 Method not allowed');
+      expect(html).toContain('Retry');
       expect(html).toContain('id="llm-model-input"');
       expect(html).not.toContain('id="llm-model-picker"');
     });
