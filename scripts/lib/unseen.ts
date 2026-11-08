@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { ALLOWED_CATEGORIES, type Repository, type RepositoryCategory } from '../../src/types/repo.ts';
+import { extractRepos } from '../../src/core/dataset.ts';
 import { classifyRepo } from './classifier.ts';
 import type { NormalizedRepo } from './normalize.ts';
 import { loadBenchmark, DEFAULT_BENCHMARK_PATH } from './benchmark.ts';
@@ -91,7 +92,7 @@ export function loadUnseenTest(options?: {
       throw new Error(`Repository data file not found at ${reposPath}`);
     }
     const reposRaw = readFileSync(reposPath, 'utf-8');
-    const repos = JSON.parse(reposRaw) as Repository[];
+    const repos = extractRepos(JSON.parse(reposRaw)) || [];
     existingRepoNames = new Set(repos.map(r => r.fullName.toLowerCase()));
   }
 
@@ -163,7 +164,7 @@ export async function runUnseenEvaluation(options?: {
       throw new Error(`Repository data file not found at ${reposFilePath}`);
     }
     const reposRaw = readFileSync(reposFilePath, 'utf-8');
-    const repos = JSON.parse(reposRaw) as Repository[];
+    const repos = extractRepos(JSON.parse(reposRaw)) || [];
     for (const r of repos) {
       repoMap.set(r.fullName.toLowerCase(), r);
     }

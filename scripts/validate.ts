@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { validateRepos } from './lib/validator.ts';
+import { extractRepos } from '../src/core/dataset.ts';
 
 function main() {
   const customPath = process.argv[2];
@@ -35,7 +36,8 @@ function main() {
     process.exit(1);
   }
 
-  const count = Array.isArray(repos) ? repos.length : (repos as { repos?: unknown[] }).repos?.length ?? 0;
+  const extracted = extractRepos(repos);
+  const count = extracted ? extracted.length : (Array.isArray(repos) ? repos.length : 0);
   console.log(`[validate] SUCCESS: Dataset contains ${count} valid repositories.`);
 
   const metaPath = resolve(process.cwd(), 'data', 'metadata.json');

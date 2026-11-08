@@ -2,12 +2,14 @@ import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fetchAllStarredRepos, getAuthenticatedUser } from './github.ts';
 import { fetchUserStarLists, mergeStarLists } from './star-lists.ts';
-import { computeInputHash, loadCache, saveCache, type ClassificationCache } from './cache.ts';
-import { classifyRepo, classifyWithRules } from './classifier.ts';
+import { loadCache, saveCache, type ClassificationCache } from './cache.ts';
+import { classifyRepo } from './classifier.ts';
 import { applyOverrides, loadOverrides } from './overrides.ts';
 import { validateRepos } from './validator.ts';
 import { atomicWriteJson } from './storage.ts';
-import type { Repository, DatasetMetadata, RepositoryCategory, ClassificationMethod } from '../../src/types/repo.ts';
+import type { Repository, DatasetMetadata } from '../../src/types/repo.ts';
+import { classifyRepos } from '../../src/core/classify-repos.ts';
+import { buildDatasetEnvelope, extractRepos } from '../../src/core/dataset.ts';
 
 export interface PipelineLogger {
   log: (msg: string) => void;
@@ -104,68 +106,21 @@ export async function executeDatasetPipeline(options: PipelineOptions): Promise<
     logger.log(`[pipeline] Loaded cache with ${Object.keys(cache).length} entries from ${cachePath}.`);
   }
 
-  // Step 4: Classify repositories (incremental using cache)
-  const classifiedRepos: Repository[] = [];
-  let cacheHits = 0;
-  let newlyClassified = 0;
-
-  for (const repo of rawRepos) {
-    const inputHash = computeInputHash(repo);
-    const cached = cache[repo.fullName];
-
-    if (cached && cached.classification.inputHash === inputHash) {
-      cacheHits++;
-      classifiedRepos.push({
-        ...repo,
-        category: cached.category,
-        classification: cached.classification,
-      });
-    } else {
-      newlyClassified++;
-
-      let category: RepositoryCategory = 'Other';
-      let method: ClassificationMethod = 'rule';
-      let confidence = 0.85;
-
-      if (ruleOnly) {
-        const ruleRes = classifyWithRules(repo);
-        if (ruleRes) {
-          category = ruleRes.category;
-          method = ruleRes.method;
-          confidence = ruleRes.confidence;
-        } else {
-          category = 'Other';
-          method = 'fallback';
-          confidence = 0.5;
-        }
-      } else {
-        const classRes = await classifyRepo(repo, geminiKey ? { apiKey: geminiKey } : undefined);
-        category = classRes.category;
-        method = classRes.method;
-        confidence = classRes.confidence;
-      }
-
-      const classificationMeta = {
-        method,
-        confidence,
-        classifiedAt: new Date().toISOString(),
-        inputHash,
-      };
-
-      if (!noCache && method !== 'fallback') {
-        cache[repo.fullName] = {
-          category,
-          classification: classificationMeta,
-        };
-      }
-
-      classifiedRepos.push({
-        ...repo,
-        category,
-        classification: classificationMeta,
-      });
-    }
-  }
+  // Step 4: Classify repositories (incremental using shared core classifyRepos)
+  const {
+    repos: classifiedRepos,
+    cache: updatedCache,
+    cacheHits,
+    newlyClassified,
+  } = await classifyRepos(rawRepos, {
+    cache,
+    ruleOnly,
+    noCache,
+    llmClassify: !ruleOnly
+      ? (repo) => classifyRepo(repo, geminiKey ? { apiKey: geminiKey } : undefined)
+      : undefined,
+  });
+  cache = updatedCache;
 
   logger.log(`[pipeline] Classification complete. Cache hits: ${cacheHits}, Newly classified: ${newlyClassified}.`);
 
@@ -190,8 +145,9 @@ export async function executeDatasetPipeline(options: PipelineOptions): Promise<
   if (options.checkUnchanged && existsSync(outputPath)) {
     try {
       const existingRaw = readFileSync(outputPath, 'utf-8');
-      const existingRepos = JSON.parse(existingRaw) as Repository[];
-      if (existingRepos.length === finalRepos.length) {
+      const parsed = JSON.parse(existingRaw);
+      const existingRepos = extractRepos(parsed);
+      if (existingRepos && existingRepos.length === finalRepos.length) {
         const isIdentical = finalRepos.every((r, idx) => {
           const ex = existingRepos[idx];
           if (!ex) return false;
@@ -219,8 +175,11 @@ export async function executeDatasetPipeline(options: PipelineOptions): Promise<
   if (isUnchanged) {
     logger.log('[pipeline] Dataset is unchanged. No write needed.');
   } else {
-    // Step 8: Atomic write
-    atomicWriteJson(outputPath, finalRepos);
+    // Step 8: Atomic write (write versioned DatasetEnvelope)
+    const envelope = buildDatasetEnvelope(finalRepos, {
+      username: activeUser,
+    });
+    atomicWriteJson(outputPath, envelope);
     logger.log(`[pipeline] Atomically saved ${finalRepos.length} validated repositories to ${outputPath}`);
 
     if (options.metadataPath) {

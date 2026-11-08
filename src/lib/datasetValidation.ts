@@ -54,9 +54,6 @@ export function validateDataset(parsed: unknown): DatasetValidationResult {
 
   if (Array.isArray(parsed)) {
     // Mode A: Legacy / implicit v1 bare array
-    if (parsed.length === 0) {
-      return { valid: false, error: 'Dataset is empty (contains 0 repositories).' };
-    }
     reposArray = parsed;
   } else {
     // Mode B: Explicit v1+ envelope object

@@ -338,10 +338,10 @@ describe('Frontend Logic', () => {
       expect(resultPrimitive.error).toBeDefined();
     });
 
-    it('rejects an empty array of repositories', () => {
+    it('accepts an empty array of repositories', () => {
       const result = parseAndValidateDataset('[]');
-      expect(result.valid).toBe(false);
-      expect(result.error).toContain('contains 0 repositories');
+      expect(result.valid).toBe(true);
+      expect(result.data).toEqual([]);
     });
 
     it('rejects items that are not objects', () => {

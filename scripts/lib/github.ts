@@ -1,3 +1,4 @@
+import { parseArgs } from 'node:util';
 import {
   GitHubApiError,
   fetchStarredRepos,
@@ -22,20 +23,30 @@ export interface FetchOptions {
 
 /**
  * Parses a target GitHub username from CLI arguments (--username <user>, --username=<user>, -u <user>)
- * or falls back to the GITHUB_USERNAME environment variable.
+ * or falls back to the GITHUB_USERNAME environment variable using node:util parseArgs.
  */
 export function parseUsernameFromArgs(argv: string[] = process.argv.slice(2)): string | undefined {
-  for (let i = 0; i < argv.length; i++) {
-    const arg = argv[i];
-    if (arg === '--username' && argv[i + 1] && !argv[i + 1].startsWith('-')) {
-      return argv[i + 1];
+  try {
+    const { values } = parseArgs({
+      args: argv,
+      options: {
+        username: {
+          type: 'string',
+        },
+        user: {
+          type: 'string',
+          short: 'u',
+        },
+      },
+      strict: false,
+      allowPositionals: true,
+    });
+    const userVal = (values.username as string | undefined) || (values.user as string | undefined);
+    if (userVal && typeof userVal === 'string' && userVal.trim()) {
+      return userVal.trim();
     }
-    if (arg.startsWith('--username=')) {
-      return arg.slice('--username='.length);
-    }
-    if (arg === '-u' && argv[i + 1] && !argv[i + 1].startsWith('-')) {
-      return argv[i + 1];
-    }
+  } catch {
+    // Non-fatal parse fallback
   }
   return process.env.GITHUB_USERNAME?.trim() || undefined;
 }

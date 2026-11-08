@@ -1,13 +1,14 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import 'dotenv/config';
-import { computeInputHash, loadCache, saveCache } from './lib/cache.ts';
+import { loadCache, saveCache } from './lib/cache.ts';
 import { classifyRepo } from './lib/classifier.ts';
 import type { NormalizedRepo } from './lib/normalize.ts';
 import { applyOverrides, loadOverrides } from './lib/overrides.ts';
 import { validateRepos } from './lib/validator.ts';
 import { atomicWriteJson, withDatasetSafety, REPOS_PATH, REPOS_BACKUP_PATH } from './lib/storage.ts';
 import type { Repository } from '../src/types/repo.ts';
+import { classifyRepos } from '../src/core/classify-repos.ts';
 
 export async function runClassification(
   rawPath: string = resolve(process.cwd(), 'data', 'raw-repos.json'),
@@ -23,45 +24,15 @@ export async function runClassification(
   const cache = loadCache();
   const overrides = loadOverrides();
 
-  const classifiedRepos: Repository[] = [];
-  let cacheHits = 0;
-  let newlyClassified = 0;
-
-  for (const repo of rawRepos) {
-    const inputHash = computeInputHash(repo);
-    const cached = cache[repo.fullName];
-
-    if (cached && cached.classification.inputHash === inputHash) {
-      cacheHits++;
-      classifiedRepos.push({
-        ...repo,
-        category: cached.category,
-        classification: cached.classification,
-      });
-    } else {
-      newlyClassified++;
-      const res = await classifyRepo(repo);
-      const classification = {
-        method: res.method,
-        confidence: res.confidence,
-        classifiedAt: new Date().toISOString(),
-        inputHash,
-      };
-
-      if (res.method !== 'fallback') {
-        cache[repo.fullName] = {
-          category: res.category,
-          classification,
-        };
-      }
-
-      classifiedRepos.push({
-        ...repo,
-        category: res.category,
-        classification,
-      });
-    }
-  }
+  const {
+    repos: classifiedRepos,
+    cache: updatedCache,
+    cacheHits,
+    newlyClassified,
+  } = await classifyRepos(rawRepos, {
+    cache,
+    llmClassify: (repo) => classifyRepo(repo),
+  });
 
   console.log(`[classify] Finished: ${cacheHits} cache hits, ${newlyClassified} newly classified.`);
 
@@ -74,7 +45,7 @@ export async function runClassification(
   }
 
   atomicWriteJson(targetPath, finalRepos);
-  saveCache(cache);
+  saveCache(updatedCache);
   console.log(`[classify] Saved ${finalRepos.length} validated repositories to ${targetPath}`);
   return finalRepos;
 }

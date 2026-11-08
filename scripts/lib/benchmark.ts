@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { ALLOWED_CATEGORIES, type Repository, type RepositoryCategory } from '../../src/types/repo.ts';
+import { extractRepos } from '../../src/core/dataset.ts';
 import { classifyRepo } from './classifier.ts';
 import type { NormalizedRepo } from './normalize.ts';
 
@@ -119,13 +120,13 @@ export async function runEvaluation(options?: {
       throw new Error(`Repository data file not found at ${reposFilePath}`);
     }
     const reposRaw = readFileSync(reposFilePath, 'utf-8');
-    const repos = JSON.parse(reposRaw) as Repository[];
+    const repos = extractRepos(JSON.parse(reposRaw)) || [];
     for (const r of repos) {
       repoMap.set(r.fullName.toLowerCase(), r);
     }
   } else if (existsSync(DEFAULT_REPOS_PATH)) {
     const reposRaw = readFileSync(DEFAULT_REPOS_PATH, 'utf-8');
-    const repos = JSON.parse(reposRaw) as Repository[];
+    const repos = extractRepos(JSON.parse(reposRaw)) || [];
     for (const r of repos) {
       repoMap.set(r.fullName.toLowerCase(), r);
     }

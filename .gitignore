@@ -29,6 +29,7 @@ dist-ssr
 
 # Local data cache, backup, and local dataset (not committed)
 data/repos.json
+data/raw-repos.json
 data/metadata.json
 data/.cache.json
 data/repos.backup.json

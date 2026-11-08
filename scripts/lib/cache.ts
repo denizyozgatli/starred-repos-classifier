@@ -1,15 +1,10 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import type { ClassificationMeta, RepositoryCategory } from '../../src/types/repo.ts';
 import { computeInputHash } from '../../src/core/hash.ts';
+import { extractRepos } from '../../src/core/dataset.ts';
+import type { CacheEntry, ClassificationCache } from '../../src/core/classify-repos.ts';
 
-export interface CacheEntry {
-  category: RepositoryCategory;
-  classification: ClassificationMeta;
-}
-
-export type ClassificationCache = Record<string, CacheEntry>;
-
+export type { CacheEntry, ClassificationCache };
 export { computeInputHash };
 
 const CACHE_PATH = resolve(process.cwd(), 'data', '.cache.json');
@@ -32,7 +27,8 @@ export function loadCache(customPath?: string, seedReposPath?: string | null): C
   if (seedFile && existsSync(seedFile)) {
     try {
       const raw = readFileSync(seedFile, 'utf-8');
-      const repos = JSON.parse(raw);
+      const parsed = JSON.parse(raw);
+      const repos = extractRepos(parsed);
       if (Array.isArray(repos)) {
         for (const repo of repos) {
           if (
