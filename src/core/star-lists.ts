@@ -10,6 +10,7 @@ export interface FetchStarListsOptions {
   isViewer: boolean;
   signal?: AbortSignal;
   logger?: StarListsLogger;
+  throwOnError?: boolean;
 }
 
 interface GraphQLPageInfo {
@@ -206,6 +207,7 @@ export async function fetchUserStarLists(
   let isViewer = false;
   let signal: AbortSignal | undefined;
   let logger: StarListsLogger | undefined;
+  let throwOnError = false;
 
   if (typeof optionsOrToken === 'object' && optionsOrToken !== null) {
     token = optionsOrToken.token;
@@ -213,6 +215,7 @@ export async function fetchUserStarLists(
     isViewer = Boolean(optionsOrToken.isViewer);
     signal = optionsOrToken.signal;
     logger = optionsOrToken.logger;
+    throwOnError = Boolean(optionsOrToken.throwOnError);
   } else {
     token = optionsOrToken;
     username = usernameParam;
@@ -245,6 +248,9 @@ export async function fetchUserStarLists(
         const errorMsg = res.errors.map((e: { message: string }) => e.message).join('; ');
         warn(`[star-lists] Warning from GraphQL: ${errorMsg}`);
         if (!res.data?.user?.lists && !res.data?.viewer?.lists) {
+          if (throwOnError) {
+            throw new Error(errorMsg);
+          }
           break;
         }
       }
@@ -322,6 +328,9 @@ export async function fetchUserStarLists(
 
     log(`[star-lists] Successfully mapped Star Lists for ${repoToLists.size} unique repositories.`);
   } catch (error) {
+    if (throwOnError) {
+      throw error;
+    }
     warn(
       `[star-lists] Warning: Failed to retrieve Star Lists via GitHub GraphQL API. Proceeding with empty lists: ${error instanceof Error ? error.message : String(error)}`
     );

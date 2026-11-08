@@ -9,8 +9,7 @@ interface ImportModalProps {
   onImport: (repos: Repository[], fileName: string, metadata?: DatasetValidationResult['metadata']) => void;
   isImported: boolean;
   importedFileName?: string;
-  onResetToDefault: () => void;
-  defaultRepoCount: number;
+  onClearImport?: () => void;
 }
 
 export const ImportModal: React.FC<ImportModalProps> = ({
@@ -19,8 +18,7 @@ export const ImportModal: React.FC<ImportModalProps> = ({
   onImport,
   isImported,
   importedFileName,
-  onResetToDefault,
-  defaultRepoCount,
+  onClearImport,
 }) => {
   const [isDragging, setIsDragging] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -185,17 +183,19 @@ export const ImportModal: React.FC<ImportModalProps> = ({
                   Active: <strong className="text-[#58a6ff]">{importedFileName}</strong> (session memory)
                 </span>
               </div>
-              <button
-                type="button"
-                onClick={() => {
-                  onResetToDefault();
-                  onClose();
-                }}
-                className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium text-[#c9d1d9] hover:text-white bg-[#21262d] hover:bg-[#30363d] border border-[#30363d] rounded-md transition-colors focus-visible:ring-2 focus-visible:ring-[#58a6ff] focus-visible:outline-none"
-              >
-                <RotateCcw className="w-3 h-3" />
-                <span>Use Default ({defaultRepoCount})</span>
-              </button>
+              {onClearImport && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    onClearImport();
+                    onClose();
+                  }}
+                  className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium text-[#c9d1d9] hover:text-white bg-[#21262d] hover:bg-[#30363d] border border-[#30363d] rounded-md transition-colors focus-visible:ring-2 focus-visible:ring-[#58a6ff] focus-visible:outline-none cursor-pointer"
+                >
+                  <RotateCcw className="w-3 h-3" />
+                  <span>Clear imported data</span>
+                </button>
+              )}
             </div>
           )}
 

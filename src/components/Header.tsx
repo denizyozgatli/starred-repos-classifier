@@ -1,8 +1,20 @@
-import React from 'react';
-import { Star, Upload } from 'lucide-react';
+import React, { useMemo } from 'react';
+import { Star, Upload, RefreshCw, LogOut } from 'lucide-react';
 import type { Repository } from '../types/repo.ts';
 import type { ExportFilterContext } from '../lib/export.ts';
 import { ExportMenu } from './ExportMenu.tsx';
+
+function formatRelativeTime(isoString: string | null): string {
+  if (!isoString) return '';
+  const date = new Date(isoString);
+  const now = Date.now();
+  const diffSec = Math.max(0, Math.floor((now - date.getTime()) / 1000));
+
+  if (diffSec < 60) return 'just now';
+  if (diffSec < 3600) return `${Math.floor(diffSec / 60)}m ago`;
+  if (diffSec < 86400) return `${Math.floor(diffSec / 3600)}h ago`;
+  return `${Math.floor(diffSec / 86400)}d ago`;
+}
 
 interface HeaderProps {
   totalCount: number;
@@ -11,10 +23,16 @@ interface HeaderProps {
   isImported?: boolean;
   importedFileName?: string;
   onOpenImport: () => void;
-  onResetToDefault?: () => void;
+  onClearImport?: () => void;
   repos: Repository[];
   filteredRepos: Repository[];
   filterContext?: ExportFilterContext;
+  isConnected?: boolean;
+  viewerLogin?: string | null;
+  lastSyncAt?: string | null;
+  isSyncing?: boolean;
+  onRefresh?: () => void;
+  onDisconnect?: () => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -24,12 +42,29 @@ export const Header: React.FC<HeaderProps> = ({
   isImported = false,
   importedFileName,
   onOpenImport,
-  onResetToDefault,
+  onClearImport,
   repos,
   filteredRepos,
   filterContext,
+  isConnected = false,
+  viewerLogin,
+  lastSyncAt,
+  isSyncing = false,
+  onRefresh,
+  onDisconnect,
 }) => {
   const isFiltered = totalCount !== filteredCount;
+  const relativeSyncTime = useMemo(() => formatRelativeTime(lastSyncAt ?? null), [lastSyncAt]);
+
+  const handleDisconnect = () => {
+    if (!onDisconnect) return;
+    const confirmed = window.confirm(
+      'Disconnect your GitHub account and clear cached repositories on this device?'
+    );
+    if (confirmed) {
+      onDisconnect();
+    }
+  };
 
   return (
     <header className="border-b border-[#30363d] bg-[#161b22]/85 backdrop-blur-md sticky top-0 z-30 px-4 sm:px-8 py-3 transition-colors shadow-sm">
@@ -48,15 +83,25 @@ export const Header: React.FC<HeaderProps> = ({
                 <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-[#a371f7]/15 text-[#d2a8ff] border border-[#a371f7]/30 max-w-[180px] sm:max-w-xs truncate">
                   Imported: {importedFileName || 'local file'}
                 </span>
-                {onResetToDefault && (
+                {onClearImport && (
                   <button
                     type="button"
-                    onClick={onResetToDefault}
+                    onClick={onClearImport}
                     className="text-[11px] text-github-muted hover:text-white underline decoration-github-muted underline-offset-2 transition-colors cursor-pointer"
-                    title="Switch back to default bundled dataset"
+                    title="Clear imported dataset"
                   >
-                    Reset
+                    Clear
                   </button>
+                )}
+              </div>
+            ) : isConnected && viewerLogin ? (
+              <div className="flex items-center gap-1.5 mt-1 leading-none text-[11px] text-github-muted">
+                <span className="font-medium text-white/90">@{viewerLogin}</span>
+                {relativeSyncTime && (
+                  <>
+                    <span>•</span>
+                    <span>Last synced {relativeSyncTime}</span>
+                  </>
                 )}
               </div>
             ) : (
@@ -67,9 +112,37 @@ export const Header: React.FC<HeaderProps> = ({
           </div>
         </div>
 
-        {/* Counter, Dataset Action Group (Import / Export) & GitHub Profile Access */}
+        {/* Counter, Actions & Controls */}
         <div className="flex items-center gap-2 sm:gap-2.5">
           <div className="flex items-center gap-1.5">
+            {isConnected && onRefresh && (
+              <button
+                type="button"
+                onClick={onRefresh}
+                disabled={isSyncing}
+                className="inline-flex items-center gap-1.5 px-2.5 sm:px-3 py-1 text-xs font-medium rounded-lg border border-[#30363d] bg-[#21262d] text-white/90 hover:bg-[#30363d] hover:text-white disabled:opacity-50 disabled:cursor-not-allowed transition-colors focus-visible:ring-2 focus-visible:ring-[#58a6ff] focus-visible:outline-none cursor-pointer"
+                title={isSyncing ? 'Syncing…' : 'Refresh starred repositories'}
+                aria-label="Refresh starred repositories"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin' : ''}`} aria-hidden="true" />
+                <span className="hidden sm:inline">{isSyncing ? 'Syncing…' : 'Refresh'}</span>
+              </button>
+            )}
+
+            {isConnected && onDisconnect && (
+              <button
+                type="button"
+                onClick={handleDisconnect}
+                disabled={isSyncing}
+                className="inline-flex items-center gap-1.5 px-2.5 sm:px-3 py-1 text-xs font-medium rounded-lg border border-[#30363d] bg-[#21262d] text-[#ff7b72] hover:bg-[#f85149]/15 hover:border-[#f85149]/40 disabled:opacity-50 disabled:cursor-not-allowed transition-colors focus-visible:ring-2 focus-visible:ring-[#f85149] focus-visible:outline-none cursor-pointer"
+                title="Disconnect GitHub account"
+                aria-label="Disconnect GitHub account"
+              >
+                <LogOut className="w-3.5 h-3.5" aria-hidden="true" />
+                <span className="hidden sm:inline">Disconnect</span>
+              </button>
+            )}
+
             <button
               type="button"
               onClick={onOpenImport}
@@ -85,12 +158,14 @@ export const Header: React.FC<HeaderProps> = ({
               <span className="hidden sm:inline">Import JSON</span>
               <span className="sm:hidden">Import</span>
             </button>
+
             <ExportMenu
               repos={repos}
               filteredRepos={filteredRepos}
               filterContext={filterContext}
             />
           </div>
+
           <div
             className="text-xs font-medium text-github-muted bg-[#21262d] px-2.5 sm:px-3 py-1 rounded-full border border-[#30363d] whitespace-nowrap"
             aria-live="polite"

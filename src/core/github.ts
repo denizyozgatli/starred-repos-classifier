@@ -21,13 +21,24 @@ export class GitHubApiError extends Error {
   status: number;
   statusText: string;
   rateLimitReset?: Date;
+  rateLimitRemaining?: number;
+  isRateLimit?: boolean;
 
-  constructor(message: string, status: number, statusText: string, rateLimitReset?: Date) {
+  constructor(
+    message: string,
+    status: number,
+    statusText: string,
+    rateLimitReset?: Date,
+    rateLimitRemaining?: number,
+    isRateLimit?: boolean
+  ) {
     super(message);
     this.name = 'GitHubApiError';
     this.status = status;
     this.statusText = statusText;
     this.rateLimitReset = rateLimitReset;
+    this.rateLimitRemaining = rateLimitRemaining;
+    this.isRateLimit = isRateLimit ?? (Boolean(rateLimitReset) || status === 429);
   }
 }
 
@@ -46,7 +57,8 @@ function getGitHubHeaders(token?: string): Record<string, string> {
 }
 
 function handleGitHubErrors(response: Response, username?: string): void {
-  const remaining = response.headers?.get('x-ratelimit-remaining');
+  const remainingHeader = response.headers?.get('x-ratelimit-remaining');
+  const remaining = remainingHeader !== null && remainingHeader !== undefined ? parseInt(remainingHeader, 10) : undefined;
   const resetTimestamp = response.headers?.get('x-ratelimit-reset');
   const resetDate = resetTimestamp ? new Date(parseInt(resetTimestamp, 10) * 1000) : undefined;
 
@@ -59,11 +71,25 @@ function handleGitHubErrors(response: Response, username?: string): void {
   }
 
   if (response.status === 403 || response.status === 429) {
-    if (remaining === '0') {
+    if (remaining === 0 || response.status === 429) {
       const resetMsg = resetDate ? ` Rate limit resets at ${resetDate.toLocaleTimeString()}.` : '';
-      throw new GitHubApiError(`GitHub API rate limit exceeded.${resetMsg}`, response.status, response.statusText, resetDate);
+      throw new GitHubApiError(
+        `GitHub API rate limit exceeded.${resetMsg}`,
+        response.status,
+        response.statusText,
+        resetDate,
+        remaining,
+        true
+      );
     }
-    throw new GitHubApiError(`GitHub API access forbidden: ${response.statusText}`, response.status, response.statusText);
+    throw new GitHubApiError(
+      `GitHub API access forbidden: ${response.statusText}`,
+      response.status,
+      response.statusText,
+      resetDate,
+      remaining,
+      false
+    );
   }
 
   if (!response.ok) {
@@ -115,7 +141,7 @@ export async function fetchStarredRepos(options: FetchStarredReposOptions = {}):
   const maxPages = options.maxPages ?? Infinity;
 
   if (!username && !token) {
-    throw new Error('GitHub token is required to fetch starred repositories. Please set GITHUB_TOKEN environment variable.');
+    throw new Error('GitHub token or username is required.');
   }
 
   let isViewer = false;

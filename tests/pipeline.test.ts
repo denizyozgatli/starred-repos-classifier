@@ -704,7 +704,7 @@ describe('Data Pipeline', () => {
 
     it('throws when GITHUB_TOKEN is missing', async () => {
       delete process.env.GITHUB_TOKEN;
-      await expect(fetchAllStarredRepos({ token: '' })).rejects.toThrow('GitHub token is required');
+      await expect(fetchAllStarredRepos({ token: '' })).rejects.toThrow('GitHub token or username is required.');
     });
 
     it('handles multiple pages until all pages are retrieved', async () => {

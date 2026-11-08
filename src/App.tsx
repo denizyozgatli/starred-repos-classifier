@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo, useCallback } from 'react';
+import { AlertTriangle, RefreshCw, X } from 'lucide-react';
 import type { Repository, RepositoryCategory } from './types/repo.ts';
 import type { DatasetValidationResult } from './lib/datasetValidation.ts';
 import { computeContextualFilterOptions, filterRepositories } from './lib/filters.ts';
@@ -12,17 +13,22 @@ import { FilterBar } from './components/FilterBar.tsx';
 import { SortSelector } from './components/SortSelector.tsx';
 import { RepoGrid } from './components/RepoGrid.tsx';
 import { EmptyState } from './components/EmptyState.tsx';
-
-const metaEnv = (import.meta as unknown as { env?: Record<string, string> }).env;
+import { ConnectGitHub } from './components/ConnectGitHub.tsx';
+import { useGitHubSync } from './hooks/useGitHubSync.ts';
 
 export default function App() {
-  const [repos, setRepos] = useState<Repository[]>([]);
+  const sync = useGitHubSync();
+
+  const [importedRepos, setImportedRepos] = useState<Repository[] | null>(null);
   const [importedFileName, setImportedFileName] = useState<string | null>(null);
   const [importedMetadata, setImportedMetadata] = useState<DatasetValidationResult['metadata'] | null>(null);
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [dismissedListsNotice, setDismissedListsNotice] = useState(false);
 
-  const datasetOwner = metaEnv?.VITE_GITHUB_USERNAME?.trim() || importedMetadata?.username;
+  const isImported = importedFileName !== null && importedRepos !== null;
+  const repos = isImported ? (importedRepos ?? []) : (sync.dataset ? sync.dataset.repos : []);
+  const hasLoadedDataset = isImported || sync.dataset !== null;
+  const datasetOwner = isImported ? importedMetadata?.username : (sync.viewerLogin || importedMetadata?.username);
 
   // Initialize state from URL params
   const [query, setQuery] = useState<string>('');
@@ -106,14 +112,11 @@ export default function App() {
     setSortBy('relevance');
   }, []);
 
-  const isImported = importedFileName !== null;
-
   const handleImport = useCallback(
     (newRepos: Repository[], fileName: string, metadata?: DatasetValidationResult['metadata']) => {
-      setRepos(newRepos);
+      setImportedRepos(newRepos);
       setImportedFileName(fileName);
       setImportedMetadata(metadata || null);
-      setError(null);
       setQuery('');
       setSelectedCategories([]);
       setSelectedLanguages([]);
@@ -123,11 +126,10 @@ export default function App() {
     []
   );
 
-  const handleResetToDefault = useCallback(() => {
-    setRepos([]);
+  const handleClearImport = useCallback(() => {
+    setImportedRepos(null);
     setImportedFileName(null);
     setImportedMetadata(null);
-    setError(null);
     setQuery('');
     setSelectedCategories([]);
     setSelectedLanguages([]);
@@ -156,63 +158,122 @@ export default function App() {
         isImported={isImported}
         importedFileName={importedFileName ?? undefined}
         onOpenImport={() => setIsImportModalOpen(true)}
-        onResetToDefault={isImported ? handleResetToDefault : undefined}
+        onClearImport={isImported ? handleClearImport : undefined}
         repos={repos}
         filteredRepos={filteredAndSortedRepos}
         filterContext={exportFilterContext}
+        isConnected={Boolean(sync.dataset || sync.viewerLogin)}
+        viewerLogin={sync.viewerLogin}
+        lastSyncAt={sync.lastSyncAt}
+        isSyncing={sync.status === 'syncing' || sync.isBackgroundRefreshing}
+        onRefresh={sync.refresh}
+        onDisconnect={sync.disconnect}
       />
 
       <main className="flex-1 max-w-7xl mx-auto w-full px-3.5 sm:px-8 py-4 sm:py-6 space-y-3.5 sm:space-y-4">
-        {/* Controls: Search & Sort Bar */}
-        <section aria-label="Search and Sorting Controls" className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 sm:gap-3">
-          <div className="flex-1">
-            <SearchBar
-              value={query}
-              onChange={setQuery}
-              onClear={() => setQuery('')}
-            />
+        {/* Background Refresh Notice */}
+        {sync.isBackgroundRefreshing && sync.dataset && (
+          <div className="bg-[#161b22] border border-[#30363d] rounded-xl px-4 py-2.5 flex items-center justify-between text-xs text-github-muted animate-in fade-in">
+            <div className="flex items-center gap-2">
+              <RefreshCw className="w-3.5 h-3.5 animate-spin text-[#58a6ff]" aria-hidden="true" />
+              <span>
+                Refreshing starred repositories in background…{' '}
+                {sync.phase === 'classifying'
+                  ? `Classifying ${sync.progress.done} / ${sync.progress.total || '…'}`
+                  : `Fetching page ${sync.progress.page ?? 1}`}
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={sync.cancel}
+              className="text-xs text-github-muted hover:text-white underline decoration-github-muted underline-offset-2 transition-colors cursor-pointer"
+            >
+              Cancel
+            </button>
           </div>
-          <div className="shrink-0 flex items-center justify-end">
-            <SortSelector value={sortBy} onChange={setSortBy} />
-          </div>
-        </section>
+        )}
 
-        {/* Dynamic Filters */}
-        <section aria-label="Filter Controls" className="bg-[#161b22]/70 border border-[#30363d] rounded-xl p-3 sm:p-3.5 shadow-xs">
-          <FilterBar
-            filterOptions={filterOptions}
-            selectedCategories={selectedCategories}
-            selectedLanguages={selectedLanguages}
-            selectedList={selectedList}
-            onToggleCategory={handleToggleCategory}
-            onToggleLanguage={handleToggleLanguage}
-            onSelectList={setSelectedList}
-            onClearAll={handleResetFilters}
+        {/* Star Lists Unavailable Notice */}
+        {sync.listsUnavailable && !dismissedListsNotice && (
+          <div className="bg-[#161b22] border border-[#e3b341]/30 rounded-xl px-4 py-2.5 flex items-center justify-between text-xs text-[#e3b341] animate-in fade-in">
+            <div className="flex items-center gap-2">
+              <AlertTriangle className="w-4 h-4 shrink-0 text-[#e3b341]" aria-hidden="true" />
+              <span>Star lists could not be loaded with this token; categories still work.</span>
+            </div>
+            <button
+              type="button"
+              onClick={() => setDismissedListsNotice(true)}
+              className="text-github-muted hover:text-white p-1 rounded-md transition-colors cursor-pointer"
+              aria-label="Dismiss notice"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        )}
+
+        {!hasLoadedDataset ? (
+          <ConnectGitHub
+            isSyncing={sync.status === 'syncing'}
+            phase={sync.phase}
+            progress={sync.progress}
+            error={sync.error?.message}
+            onClearError={sync.clearError}
+            onConnect={sync.connect}
+            onCancel={sync.cancel}
+            onOpenImport={() => setIsImportModalOpen(true)}
           />
-        </section>
+        ) : (
+          <>
+            {/* Controls: Search & Sort Bar */}
+            <section aria-label="Search and Sorting Controls" className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 sm:gap-3">
+              <div className="flex-1">
+                <SearchBar
+                  value={query}
+                  onChange={setQuery}
+                  onClear={() => setQuery('')}
+                />
+              </div>
+              <div className="shrink-0 flex items-center justify-end">
+                <SortSelector value={sortBy} onChange={setSortBy} />
+              </div>
+            </section>
 
-        {/* Main Content Area */}
-        <section aria-label="Repositories" className="min-h-[300px]">
-          {error ? (
-            <EmptyState type="error" message={error} onReset={() => setError(null)} />
-          ) : repos.length === 0 ? (
-            isImported ? (
-              <EmptyState type="empty" />
-            ) : (
-              <EmptyState type="initial" onOpenImport={() => setIsImportModalOpen(true)} />
-            )
-          ) : filteredAndSortedRepos.length === 0 ? (
-            <EmptyState
-              type="search"
-              query={query}
-              hasActiveFilters={hasActiveFilters}
-              onClearQuery={() => setQuery('')}
-              onReset={handleResetFilters}
-            />
-          ) : (
-            <RepoGrid repos={filteredAndSortedRepos} />
-          )}
-        </section>
+            {/* Dynamic Filters */}
+            <section aria-label="Filter Controls" className="bg-[#161b22]/70 border border-[#30363d] rounded-xl p-3 sm:p-3.5 shadow-xs">
+              <FilterBar
+                filterOptions={filterOptions}
+                selectedCategories={selectedCategories}
+                selectedLanguages={selectedLanguages}
+                selectedList={selectedList}
+                onToggleCategory={handleToggleCategory}
+                onToggleLanguage={handleToggleLanguage}
+                onSelectList={setSelectedList}
+                onClearAll={handleResetFilters}
+              />
+            </section>
+
+            {/* Main Content Area */}
+            <section aria-label="Repositories" className="min-h-[300px]">
+              {repos.length === 0 ? (
+                <EmptyState
+                  type="empty"
+                  onOpenImport={() => setIsImportModalOpen(true)}
+                  onConnect={() => sync.disconnect()}
+                />
+              ) : filteredAndSortedRepos.length === 0 ? (
+                <EmptyState
+                  type="search"
+                  query={query}
+                  hasActiveFilters={hasActiveFilters}
+                  onClearQuery={() => setQuery('')}
+                  onReset={handleResetFilters}
+                />
+              ) : (
+                <RepoGrid repos={filteredAndSortedRepos} />
+              )}
+            </section>
+          </>
+        )}
       </main>
 
       <footer className="border-t border-[#30363d] py-5 px-4 text-center text-xs text-github-muted">
@@ -243,8 +304,7 @@ export default function App() {
         onImport={handleImport}
         isImported={isImported}
         importedFileName={importedFileName ?? undefined}
-        onResetToDefault={handleResetToDefault}
-        defaultRepoCount={0}
+        onClearImport={isImported ? handleClearImport : undefined}
       />
     </div>
   );
