@@ -286,14 +286,16 @@ export default function App() {
           </div>
         )}
 
-        {/* Background Refresh Notice */}
-        {sync.isBackgroundRefreshing && sync.dataset && (
+        {/* Active Sync Notice with Cancel */}
+        {(sync.isBackgroundRefreshing || sync.status === 'syncing') && sync.dataset && (
           <div className="space-y-2">
             <div className="bg-[#161b22] border border-[#30363d] rounded-xl px-4 py-2.5 flex items-center justify-between text-xs text-github-muted animate-in fade-in">
               <div className="flex items-center gap-2">
                 <RefreshCw className="w-3.5 h-3.5 animate-spin text-[#58a6ff]" aria-hidden="true" />
                 <span>
-                  Refreshing starred repositories in background…{' '}
+                  {sync.status === 'syncing'
+                    ? 'Syncing starred repositories… '
+                    : 'Refreshing starred repositories in background… '}
                   {sync.phase === 'llm' || sync.phase === 'waiting'
                     ? `Classifying with AI ${sync.progress.done} / ${sync.progress.total || '…'}${
                         sync.progress.waitingMs ? ` · next in ${Math.ceil(sync.progress.waitingMs / 1000)}s` : ''
@@ -455,9 +457,12 @@ export default function App() {
         onReclassifyOther={async config => {
           await sync.reclassifyOther(config);
         }}
+        onResetAI={sync.resetAI}
+        llmClassifiedCount={sync.dataset?.repos.filter(r => r.classification?.method === 'llm').length ?? 0}
         fetchLlmModels={sync.fetchLlmModels}
         isSyncing={sync.status === 'syncing' || sync.isBackgroundRefreshing}
         hasCachedData={Boolean(sync.dataset)}
+        store={sync.store}
       />
     </div>
   );

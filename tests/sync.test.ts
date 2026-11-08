@@ -2,14 +2,21 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import {
   syncStarredRepos,
   shouldAutoRefresh,
+  resetAIClassifications,
   SyncError,
   DEFAULT_MAX_CACHE_AGE_MS,
   resolveSyncFailure,
   type SyncProgress,
 } from '../src/lib/sync.ts';
 import { createActivityLog } from '../src/lib/activityLog.ts';
-import { MemoryStore } from '../src/lib/storage/datasetStore.ts';
+import {
+  MemoryStore,
+  getSyncLog,
+  appendSyncLog,
+  clearSyncLog,
+} from '../src/lib/storage/datasetStore.ts';
 import { saveToken, loadToken, clearToken, isTokenRemembered } from '../src/lib/storage/settings.ts';
+import { classifyRepos } from '../src/core/classify-repos.ts';
 import type { DatasetEnvelope } from '../src/types/repo.ts';
 
 class MockStorage implements Storage {
@@ -643,6 +650,412 @@ describe('Sync Engine & Storage', () => {
       expect(waitingEvents.length).toBeGreaterThan(0);
       expect(waitingEvents[0].waitingMs).toBe(2500);
       expect(waitingEvents[0].repoName).toBe('ambiguous-repo');
+    });
+  });
+
+  describe('Persistent Sync Log in Storage Layer (src/lib/storage/datasetStore.ts)', () => {
+    it('roundtrips log entries through appendSyncLog and getSyncLog', async () => {
+      const store = new MemoryStore();
+      await appendSyncLog({ ts: 1000, text: 'First event', kind: 'info' }, { store });
+      await appendSyncLog({ ts: 2000, text: 'Second event', kind: 'warn' }, { store });
+
+      const logs = await getSyncLog(store);
+      expect(logs).toHaveLength(2);
+      expect(logs[0]).toEqual({ ts: 1000, text: 'First event', kind: 'info' });
+      expect(logs[1]).toEqual({ ts: 2000, text: 'Second event', kind: 'warn' });
+    });
+
+    it('caps log at 500 entries, silently evicting oldest entries on overflow', async () => {
+      const store = new MemoryStore();
+      for (let i = 1; i <= 520; i++) {
+        await appendSyncLog({ ts: i, text: `Event #${i}`, kind: 'info' }, { store, capacity: 500 });
+      }
+
+      const logs = await getSyncLog(store);
+      expect(logs).toHaveLength(500);
+      expect(logs[0].text).toBe('Event #21');
+      expect(logs[499].text).toBe('Event #520');
+    });
+
+    it('defensively drops entries containing Bearer headers or configured keys', async () => {
+      const store = new MemoryStore();
+      const apiKey = 'sk-proj-supersecretkey123456789';
+      const pat = 'ghp_secrettokenabc123456789';
+
+      // Safe entries
+      await appendSyncLog({ ts: 1, text: 'Fetching stars — page 1', kind: 'info' }, { store, storedKeys: [apiKey, pat] });
+
+      // Dropped entries
+      await appendSyncLog({ ts: 2, text: 'Sending Authorization: Bearer abcdef123456', kind: 'info' }, { store, storedKeys: [apiKey, pat] });
+      await appendSyncLog({ ts: 3, text: `Called OpenAI with key ${apiKey}`, kind: 'info' }, { store, storedKeys: [apiKey, pat] });
+      await appendSyncLog({ ts: 4, text: `GitHub PAT ${pat} loaded`, kind: 'info' }, { store, storedKeys: [apiKey, pat] });
+
+      const logs = await getSyncLog(store);
+      expect(logs).toHaveLength(1);
+      expect(logs[0].text).toBe('Fetching stars — page 1');
+    });
+
+    it('clearSyncLog removes all persistent entries', async () => {
+      const store = new MemoryStore();
+      await appendSyncLog({ ts: 1, text: 'To be cleared', kind: 'info' }, { store });
+      expect(await getSyncLog(store)).toHaveLength(1);
+
+      await clearSyncLog(store);
+      expect(await getSyncLog(store)).toHaveLength(0);
+    });
+  });
+
+  describe('Reset AI Classifications (src/lib/sync.ts resetAIClassifications)', () => {
+    it('removes LLM cache entries, reverts dataset repos to Other/fallback, keeps rule entries, and persists', async () => {
+      const store = new MemoryStore();
+
+      // Seed cache
+      const initialCache = {
+        'facebook/react': {
+          category: 'Web Frontend' as const,
+          classification: {
+            method: 'rule' as const,
+            confidence: 0.85,
+            classifiedAt: '2026-03-01T00:00:00Z',
+            inputHash: 'hash-react',
+          },
+        },
+        'octocat/ambiguous-1': {
+          category: 'Backend / API' as const,
+          classification: {
+            method: 'llm' as const,
+            confidence: 0.9,
+            classifiedAt: '2026-03-01T00:00:00Z',
+            inputHash: 'hash-ambig-1',
+          },
+        },
+        'octocat/ambiguous-2': {
+          category: 'CLI / Tools' as const,
+          classification: {
+            method: 'llm' as const,
+            confidence: 0.88,
+            classifiedAt: '2026-03-01T00:00:00Z',
+            inputHash: 'hash-ambig-2',
+          },
+        },
+      };
+
+      // Seed dataset
+      const initialDataset: DatasetEnvelope = {
+        schemaVersion: 1,
+        username: 'octocat',
+        generatedAt: '2026-03-01T00:00:00Z',
+        repos: [
+          {
+            id: 1,
+            name: 'react',
+            fullName: 'facebook/react',
+            owner: 'facebook',
+            description: 'UI library',
+            topics: ['react'],
+            language: 'JavaScript',
+            stars: 200000,
+            url: 'https://github.com/facebook/react',
+            updatedAt: '2026-03-01T00:00:00Z',
+            category: 'Web Frontend',
+            classification: {
+              method: 'rule',
+              confidence: 0.85,
+              classifiedAt: '2026-03-01T00:00:00Z',
+              inputHash: 'hash-react',
+            },
+          },
+          {
+            id: 2,
+            name: 'ambiguous-1',
+            fullName: 'octocat/ambiguous-1',
+            owner: 'octocat',
+            description: 'Something',
+            topics: [],
+            language: 'C++',
+            stars: 10,
+            url: 'https://github.com/octocat/ambiguous-1',
+            updatedAt: '2026-03-01T00:00:00Z',
+            category: 'Backend / API',
+            classification: {
+              method: 'llm',
+              confidence: 0.9,
+              classifiedAt: '2026-03-01T00:00:00Z',
+              inputHash: 'hash-ambig-1',
+            },
+          },
+          {
+            id: 3,
+            name: 'ambiguous-2',
+            fullName: 'octocat/ambiguous-2',
+            owner: 'octocat',
+            description: 'Something else',
+            topics: [],
+            language: 'Go',
+            stars: 20,
+            url: 'https://github.com/octocat/ambiguous-2',
+            updatedAt: '2026-03-01T00:00:00Z',
+            category: 'CLI / Tools',
+            classification: {
+              method: 'llm',
+              confidence: 0.88,
+              classifiedAt: '2026-03-01T00:00:00Z',
+              inputHash: 'hash-ambig-2',
+            },
+          },
+        ],
+      };
+
+      await store.set('classificationCache', initialCache);
+      await store.set('dataset', initialDataset);
+
+      const result = await resetAIClassifications({ store });
+      expect(result.resetCount).toBe(2);
+
+      // Verify updated cache
+      const updatedCache = await store.get<any>('classificationCache');
+      expect(updatedCache['facebook/react']).toBeDefined();
+      expect(updatedCache['octocat/ambiguous-1']).toBeUndefined();
+      expect(updatedCache['octocat/ambiguous-2']).toBeUndefined();
+
+      // Verify updated dataset
+      const updatedDataset = await store.get<DatasetEnvelope>('dataset');
+      expect(updatedDataset?.repos).toHaveLength(3);
+      const reactRepo = updatedDataset?.repos.find(r => r.name === 'react');
+      expect(reactRepo?.category).toBe('Web Frontend');
+      expect(reactRepo?.classification.method).toBe('rule');
+
+      const ambig1 = updatedDataset?.repos.find(r => r.name === 'ambiguous-1');
+      expect(ambig1?.category).toBe('Other');
+      expect(ambig1?.classification.method).toBe('fallback');
+      expect(ambig1?.classification.confidence).toBe(0.5);
+
+      const ambig2 = updatedDataset?.repos.find(r => r.name === 'ambiguous-2');
+      expect(ambig2?.category).toBe('Other');
+      expect(ambig2?.classification.method).toBe('fallback');
+    });
+
+    it('returns resetCount: 0 when no LLM classifications exist', async () => {
+      const store = new MemoryStore();
+      await store.set('classificationCache', {
+        'facebook/react': {
+          category: 'Web Frontend',
+          classification: { method: 'rule', confidence: 0.85, inputHash: 'h', classifiedAt: '' },
+        },
+      });
+
+      const res = await resetAIClassifications({ store });
+      expect(res.resetCount).toBe(0);
+    });
+
+    it('respects abort signal and leaves cache consistent without mutating store', async () => {
+      const store = new MemoryStore();
+      const initialCache = {
+        'repo/llm': {
+          category: 'Mobile' as const,
+          classification: { method: 'llm' as const, confidence: 0.9, inputHash: 'h', classifiedAt: '' },
+        },
+      };
+      await store.set('classificationCache', initialCache);
+
+      const controller = new AbortController();
+      controller.abort();
+
+      await expect(resetAIClassifications({ store, signal: controller.signal })).rejects.toThrow('aborted');
+
+      const cache = await store.get<any>('classificationCache');
+      expect(cache['repo/llm']).toBeDefined();
+    });
+  });
+
+  describe('Cache Fast Path (src/lib/sync.ts)', () => {
+    it('skips classification phase entirely and makes 0 AI calls when all repos are cache hits', async () => {
+      const store = new MemoryStore();
+      const cachedRepo = {
+        id: 999,
+        name: 'cached-repo',
+        full_name: 'octocat/cached-repo',
+        owner: { login: 'octocat' },
+        description: 'Cached description',
+        topics: ['web'],
+        language: 'TypeScript',
+        stargazers_count: 100,
+        html_url: 'https://github.com/octocat/cached-repo',
+        updated_at: '2026-01-01T00:00:00Z',
+      };
+
+      globalThis.fetch = async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.endsWith('/user')) {
+          return new Response(JSON.stringify({ login: 'octocat' }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+        }
+        if (url.includes('/user/starred')) {
+          return new Response(JSON.stringify([cachedRepo]), { status: 200, headers: { 'Content-Type': 'application/json' } });
+        }
+        if (url.endsWith('/graphql')) {
+          return new Response(JSON.stringify({ data: { viewer: { lists: { nodes: [] } } } }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+        }
+        throw new Error(`Unexpected network call: ${url}`);
+      };
+
+      // Pre-seed cache with matching inputHash
+      const normalized = {
+        id: 999,
+        name: 'cached-repo',
+        fullName: 'octocat/cached-repo',
+        owner: 'octocat',
+        description: 'Cached description',
+        topics: ['web'],
+        language: 'TypeScript',
+        stars: 100,
+        url: 'https://github.com/octocat/cached-repo',
+        updatedAt: '2026-01-01T00:00:00Z',
+        archived: false,
+        fork: false,
+      };
+      const { computeInputHash } = await import('../src/core/hash.ts');
+      const hash = computeInputHash(normalized);
+
+      await store.set('classificationCache', {
+        'octocat/cached-repo': {
+          category: 'Web Frontend',
+          classification: {
+            method: 'llm',
+            confidence: 0.95,
+            classifiedAt: new Date().toISOString(),
+            inputHash: hash,
+          },
+        },
+      });
+
+      const progressEvents: SyncProgress[] = [];
+      const result = await syncStarredRepos({
+        token: 'ghp_test_fast_path',
+        store,
+        llm: {
+          provider: 'openai',
+          apiKey: 'sk-test',
+        },
+        onProgress: p => {
+          progressEvents.push(p);
+        },
+      });
+
+      expect(result.stats.cacheHits).toBe(1);
+      expect(result.stats.newlyClassified).toBe(0);
+      expect(result.aiCalls).toBe(0);
+
+      // Verify that a classifying event with message was emitted
+      const classifyingEvents = progressEvents.filter(p => p.phase === 'classifying');
+      expect(classifyingEvents.length).toBe(1);
+      expect(classifyingEvents[0].message).toContain('Classification: 1/1 from cache, 0 AI calls');
+    });
+  });
+
+  describe('LLM-Other 7-day Retry and Fallback Caching (src/core/classify-repos.ts)', () => {
+    const sampleRepo = {
+      id: 100,
+      name: 'ambiguous-tool',
+      fullName: 'org/ambiguous-tool',
+      owner: 'org',
+      description: 'Obscure tool with no keywords',
+      topics: [],
+      language: 'Rust',
+      stars: 5,
+      url: 'https://github.com/org/ambiguous-tool',
+      updatedAt: '2026-01-01T00:00:00Z',
+      archived: false,
+      fork: false,
+    };
+
+    it('caches successful LLM answer when category is Other (method llm)', async () => {
+      let llmCalls = 0;
+      const res = await classifyRepos([sampleRepo], {
+        llmClassify: async () => {
+          llmCalls++;
+          return { category: 'Other', method: 'llm', confidence: 0.7 };
+        },
+      });
+
+      expect(llmCalls).toBe(1);
+      expect(res.repos[0].category).toBe('Other');
+      expect(res.repos[0].classification.method).toBe('llm');
+      expect(res.cache['org/ambiguous-tool']).toBeDefined();
+      expect(res.cache['org/ambiguous-tool'].classification.method).toBe('llm');
+    });
+
+    it('treats fresh LLM-Other (< 7 days old) as a cache hit', async () => {
+      const { computeInputHash } = await import('../src/core/hash.ts');
+      const hash = computeInputHash(sampleRepo);
+
+      const cache = {
+        'org/ambiguous-tool': {
+          category: 'Other' as const,
+          classification: {
+            method: 'llm' as const,
+            confidence: 0.7,
+            classifiedAt: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString(), // 2 days old
+            inputHash: hash,
+          },
+        },
+      };
+
+      let llmCalls = 0;
+      const res = await classifyRepos([sampleRepo], {
+        cache,
+        llmClassify: async () => {
+          llmCalls++;
+          return { category: 'Backend / API', method: 'llm', confidence: 0.9 };
+        },
+      });
+
+      expect(llmCalls).toBe(0);
+      expect(res.cacheHits).toBe(1);
+      expect(res.repos[0].category).toBe('Other');
+    });
+
+    it('treats 8-day-old LLM-Other (> 7 days old) as a cache miss and reclassifies', async () => {
+      const { computeInputHash } = await import('../src/core/hash.ts');
+      const hash = computeInputHash(sampleRepo);
+
+      const cache = {
+        'org/ambiguous-tool': {
+          category: 'Other' as const,
+          classification: {
+            method: 'llm' as const,
+            confidence: 0.7,
+            classifiedAt: new Date(Date.now() - 8 * 24 * 60 * 60 * 1000).toISOString(), // 8 days old (> 7 days)
+            inputHash: hash,
+          },
+        },
+      };
+
+      let llmCalls = 0;
+      const res = await classifyRepos([sampleRepo], {
+        cache,
+        llmClassify: async () => {
+          llmCalls++;
+          return { category: 'CLI / Tools', method: 'llm', confidence: 0.85 };
+        },
+      });
+
+      expect(llmCalls).toBe(1);
+      expect(res.cacheHits).toBe(0);
+      expect(res.newlyClassified).toBe(1);
+      expect(res.repos[0].category).toBe('CLI / Tools');
+    });
+
+    it('leaves fallback classifications uncached', async () => {
+      let llmCalls = 0;
+      const res = await classifyRepos([sampleRepo], {
+        llmClassify: async () => {
+          llmCalls++;
+          return { category: 'Other', method: 'fallback', confidence: 0.5 };
+        },
+      });
+
+      expect(llmCalls).toBe(1);
+      expect(res.cache['org/ambiguous-tool']).toBeUndefined();
     });
   });
 });

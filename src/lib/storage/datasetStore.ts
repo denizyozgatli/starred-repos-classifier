@@ -1,5 +1,6 @@
 import type { DatasetEnvelope } from '../../types/repo.ts';
 import type { ClassificationCache } from '../../core/classify-repos.ts';
+import type { ActivityLogEntry } from '../activityLog.ts';
 
 export interface KeyValueStore {
   get<T = unknown>(key: string): Promise<T | null>;
@@ -12,6 +13,7 @@ export type StoreKeyMap = {
   classificationCache: ClassificationCache;
   lastSyncAt: string;
   viewerLogin: string;
+  syncLog: ActivityLogEntry[];
 };
 
 export const DB_NAME = 'starred-repos-classifier';
@@ -138,3 +140,81 @@ export function createDefaultStore(): KeyValueStore {
   }
   return new MemoryStore();
 }
+
+export const SYNC_LOG_KEY = 'syncLog';
+export const SYNC_LOG_CAPACITY = 500;
+
+export function sanitizeLogEntry(
+  entry: ActivityLogEntry,
+  redactKeys: string[] = []
+): ActivityLogEntry | null {
+  const text = entry.text;
+  if (!text) return null;
+
+  // Defensive secret-filter: drop any entry containing 'Bearer '
+  if (/Bearer\s+/i.test(text)) {
+    return null;
+  }
+
+  // Drop entry if it contains any configured key or token
+  for (const key of redactKeys) {
+    const trimmed = typeof key === 'string' ? key.trim() : '';
+    if (trimmed.length >= 6 && text.includes(trimmed)) {
+      return null;
+    }
+  }
+
+  // Defensive check for common secret patterns (GitHub PATs, OpenAI/Anthropic/Google keys)
+  if (/(?:ghp_[a-zA-Z0-9]{20,}|github_pat_[a-zA-Z0-9_]{20,}|sk-(?:proj-|ant-)?[a-zA-Z0-9_-]{20,}|(?:AIza|AQ\.)[a-zA-Z0-9_-]{20,})/i.test(text)) {
+    return null;
+  }
+
+  return entry;
+}
+
+let syncLogWriteQueue: Promise<void> = Promise.resolve();
+
+export async function flushSyncLog(): Promise<void> {
+  await syncLogWriteQueue;
+}
+
+export async function getSyncLog(store: KeyValueStore = createDefaultStore()): Promise<ActivityLogEntry[]> {
+  await syncLogWriteQueue;
+  const entries = await store.get<ActivityLogEntry[]>(SYNC_LOG_KEY);
+  return Array.isArray(entries) ? entries : [];
+}
+
+export function appendSyncLog(
+  entry: ActivityLogEntry,
+  options: {
+    store?: KeyValueStore;
+    storedKeys?: string[];
+    capacity?: number;
+  } = {}
+): Promise<void> {
+  const store = options.store ?? createDefaultStore();
+  const capacity = options.capacity ?? SYNC_LOG_CAPACITY;
+  const storedKeys = options.storedKeys ?? [];
+
+  const sanitized = sanitizeLogEntry(entry, storedKeys);
+  if (!sanitized) {
+    return Promise.resolve();
+  }
+
+  syncLogWriteQueue = syncLogWriteQueue
+    .then(async () => {
+      const existing = (await store.get<ActivityLogEntry[]>(SYNC_LOG_KEY)) || [];
+      const updated = [...(Array.isArray(existing) ? existing : []), sanitized];
+      const capped = updated.length > capacity ? updated.slice(updated.length - capacity) : updated;
+      await store.set(SYNC_LOG_KEY, capped);
+    })
+    .catch(() => {});
+
+  return syncLogWriteQueue;
+}
+
+export async function clearSyncLog(store: KeyValueStore = createDefaultStore()): Promise<void> {
+  await syncLogWriteQueue;
+  await store.delete(SYNC_LOG_KEY);
+}
+

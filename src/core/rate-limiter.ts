@@ -8,6 +8,62 @@ export interface RateLimiterOptions {
   sleepFn?: (ms: number) => Promise<void>;
 }
 
+export function abortableSleep(
+  ms: number,
+  sleepFn?: (ms: number) => Promise<void>,
+  signal?: AbortSignal
+): Promise<void> {
+  if (signal?.aborted) {
+    const err = new Error('Operation aborted');
+    err.name = 'AbortError';
+    return Promise.reject(signal.reason || err);
+  }
+  if (!signal) {
+    return sleepFn ? sleepFn(ms) : new Promise(r => setTimeout(r, ms));
+  }
+
+  return new Promise<void>((resolve, reject) => {
+    let settled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+
+    const onAbort = () => {
+      if (settled) return;
+      settled = true;
+      if (timer !== undefined) clearTimeout(timer);
+      signal.removeEventListener('abort', onAbort);
+      const err = new Error('Operation aborted');
+      err.name = 'AbortError';
+      reject(signal.reason || err);
+    };
+
+    signal.addEventListener('abort', onAbort, { once: true });
+
+    if (sleepFn) {
+      sleepFn(ms).then(
+        () => {
+          if (settled) return;
+          settled = true;
+          signal.removeEventListener('abort', onAbort);
+          resolve();
+        },
+        err => {
+          if (settled) return;
+          settled = true;
+          signal.removeEventListener('abort', onAbort);
+          reject(err);
+        }
+      );
+    } else {
+      timer = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        signal.removeEventListener('abort', onAbort);
+        resolve();
+      }, ms);
+    }
+  });
+}
+
 export class RateLimiter {
   private minIntervalMs: number;
   private defaultSleepFn: (ms: number) => Promise<void>;
@@ -72,12 +128,7 @@ export class RateLimiter {
       const elapsed = now - this.lastRequestTime;
       if (this.lastRequestTime > 0 && elapsed < this.minIntervalMs) {
         const waitMs = this.minIntervalMs - elapsed;
-        await sleepFn(waitMs);
-        if (signal?.aborted) {
-          const err = new Error('Operation aborted');
-          err.name = 'AbortError';
-          throw signal.reason || err;
-        }
+        await abortableSleep(waitMs, sleepFn, signal);
       }
       this.lastRequestTime = Date.now();
     } finally {
@@ -256,12 +307,7 @@ export async function executeWithRetry<T>(
         } else {
           delayMs = Math.min(baseDelayMs * Math.pow(2, attempt), maxDelayMs);
         }
-        await sleepFn(delayMs);
-        if (signal?.aborted) {
-          const err = new Error('Operation aborted');
-          err.name = 'AbortError';
-          throw signal.reason || err;
-        }
+        await abortableSleep(delayMs, sleepFn, signal);
         continue;
       }
 

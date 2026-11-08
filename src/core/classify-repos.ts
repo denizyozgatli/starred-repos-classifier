@@ -8,6 +8,8 @@ import type {
   ClassificationMeta,
 } from './types.ts';
 
+export const LLM_OTHER_RETRY_MS = 7 * 24 * 60 * 60 * 1000;
+
 export interface CacheEntry {
   category: RepositoryCategory;
   classification: ClassificationMeta;
@@ -66,7 +68,15 @@ export async function classifyRepos(
     const inputHash = computeInputHash(repo);
     const cached = cache[repo.fullName];
 
-    if (cached && cached.classification?.inputHash === inputHash) {
+    const isInputHashMatch = Boolean(cached && cached.classification?.inputHash === inputHash);
+    const isLlmOther = cached?.classification?.method === 'llm' && cached?.category === 'Other';
+    const isExpiredLlmOther = Boolean(
+      isLlmOther &&
+      cached?.classification?.classifiedAt &&
+      Date.now() - new Date(cached.classification.classifiedAt).getTime() >= LLM_OTHER_RETRY_MS
+    );
+
+    if (isInputHashMatch && !isExpiredLlmOther) {
       cacheHits++;
       classifiedRepos.push({
         ...repo,

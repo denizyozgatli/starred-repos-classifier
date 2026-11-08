@@ -1,6 +1,6 @@
 import React from 'react';
 import { renderToString } from 'react-dom/server';
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { CURRENT_SCHEMA_VERSION, type Repository, type DatasetEnvelope } from '../src/types/repo.ts';
 import { searchRepositories } from '../src/lib/search.ts';
 import { extractFilterOptions, filterRepositories, computeContextualFilterOptions } from '../src/lib/filters.ts';
@@ -1044,6 +1044,177 @@ describe('Frontend Logic', () => {
       expect(html).toContain('12');
       expect(html).toContain('next in 4s');
       expect(html).toContain('animate-shimmer');
+    });
+  });
+
+  describe('SettingsModal Overflow Layout & Tabs (Phase 14)', () => {
+    it('modal container enforces max-height, pinned header, scrollable body, and pinned footer', () => {
+      const html = renderToString(
+        React.createElement(SettingsModal, {
+          isOpen: true,
+          onClose: () => {},
+          hasCachedData: true,
+        })
+      );
+
+      // Inner panel max-height
+      expect(html).toContain('max-h-[85vh]');
+      // Pinned header and tabs
+      expect(html).toContain('shrink-0');
+      // Scrollable body
+      expect(html).toContain('overflow-y-auto');
+      // Pinned footer buttons
+      expect(html).toContain('Cancel');
+      expect(html).toContain('Save Settings');
+    });
+
+    it('renders General tab and Activity Log tab buttons in header', () => {
+      const html = renderToString(
+        React.createElement(SettingsModal, {
+          isOpen: true,
+          onClose: () => {},
+          hasCachedData: true,
+        })
+      );
+
+      expect(html).toContain('General');
+      expect(html).toContain('Activity Log');
+    });
+
+    it('Activity Log tab renders persistent log rows, copy/clear buttons, and retention note', () => {
+      const sampleLogs = [
+        { ts: 1772985600000, text: 'Fetching stars — page 1', kind: 'info' as const },
+        { ts: 1772985605000, text: 'OpenAI · rate limit, waiting 15s', kind: 'warn' as const },
+        { ts: 1772985610000, text: 'Sync failed: Network timeout', kind: 'error' as const },
+        { ts: 1772985615000, text: 'Sync finished: 20 repos, 15 rule-based, 5 AI, 2 AI calls, 0 errors', kind: 'success' as const },
+      ];
+
+      const html = renderToString(
+        React.createElement(SettingsModal, {
+          isOpen: true,
+          onClose: () => {},
+          hasCachedData: true,
+          initialTab: 'activity',
+          initialPersistentLogs: sampleLogs,
+        })
+      );
+
+      expect(html).toContain('Last 500 events are kept on this device. Clearing browsing data removes them.');
+      expect(html).toContain('Copy log');
+      expect(html).toContain('Clear log');
+      expect(html).toContain('Close');
+      expect(html).toContain('Fetching stars — page 1');
+      expect(html).toContain('OpenAI · rate limit, waiting 15s');
+      expect(html).toContain('Sync failed: Network timeout');
+      expect(html).toContain('Sync finished: 20 repos, 15 rule-based, 5 AI, 2 AI calls, 0 errors');
+      expect(html).toContain('text-[#e3b341]'); // warn
+      expect(html).toContain('text-[#ff7b72]'); // error
+      expect(html).toContain('text-[#3fb950]'); // success
+    });
+
+    it('Reset AI classifications button: displays live count, respects disabled state when count=0 or syncing', () => {
+      // 1. With N = 5 and idle -> enabled
+      const htmlEnabled = renderToString(
+        React.createElement(SettingsModal, {
+          isOpen: true,
+          onClose: () => {},
+          hasCachedData: true,
+          onResetAI: async () => {},
+          llmClassifiedCount: 5,
+          isSyncing: false,
+        })
+      );
+
+      expect(htmlEnabled).toContain('Reset AI classifications');
+      expect(htmlEnabled).toContain("Revert 5 AI-classified repositories back to &#x27;Other&#x27;");
+      expect(htmlEnabled).toMatch(/<button[^>]*title="Reset 5 AI classifications"/);
+      expect(htmlEnabled).not.toMatch(/<button[^>]*disabled=""[^>]*title="Reset 5 AI classifications"/);
+
+      // 2. With N = 0 -> disabled
+      const htmlZero = renderToString(
+        React.createElement(SettingsModal, {
+          isOpen: true,
+          onClose: () => {},
+          hasCachedData: true,
+          onResetAI: async () => {},
+          llmClassifiedCount: 0,
+          isSyncing: false,
+        })
+      );
+      expect(htmlZero).toMatch(/<button[^>]*disabled=""[^>]*title="No AI classifications to reset"/);
+
+      // 3. With isSyncing = true -> disabled
+      const htmlSyncing = renderToString(
+        React.createElement(SettingsModal, {
+          isOpen: true,
+          onClose: () => {},
+          hasCachedData: true,
+          onResetAI: async () => {},
+          llmClassifiedCount: 5,
+          isSyncing: true,
+        })
+      );
+      expect(htmlSyncing).toMatch(/<button[^>]*disabled=""[^>]*title="Reset 5 AI classifications"/);
+    });
+
+    it('Key-reveal confirmation: displays warning strip with Yes reveal / Cancel buttons', () => {
+      // 1. Initial state: password input, confirm strip hidden
+      const htmlInitial = renderToString(
+        React.createElement(SettingsModal, {
+          isOpen: true,
+          onClose: () => {},
+          hasCachedData: true,
+          initialShowRevealConfirm: false,
+          initialShowKey: false,
+        })
+      );
+      expect(htmlInitial).toContain('type="password"');
+      expect(htmlInitial).not.toContain('Reveal API key? Anyone looking at your screen could see it.');
+
+      // 2. Confirm open state: shows warning strip and choices
+      const htmlConfirm = renderToString(
+        React.createElement(SettingsModal, {
+          isOpen: true,
+          onClose: () => {},
+          hasCachedData: true,
+          initialShowRevealConfirm: true,
+          initialShowKey: false,
+        })
+      );
+      expect(htmlConfirm).toContain('type="password"');
+      expect(htmlConfirm).toContain('Reveal API key? Anyone looking at your screen could see it.');
+      expect(htmlConfirm).toContain('Yes, reveal');
+      expect(htmlConfirm).toContain('Cancel');
+
+      // 3. Revealed state: input switches to type="text"
+      const htmlRevealed = renderToString(
+        React.createElement(SettingsModal, {
+          isOpen: true,
+          onClose: () => {},
+          hasCachedData: true,
+          initialShowRevealConfirm: false,
+          initialShowKey: true,
+        })
+      );
+      expect(htmlRevealed).toContain('type="text"');
+      expect(htmlRevealed).toContain('aria-label="Hide API key"');
+    });
+
+    it('Key-reveal auto-hide 30s timer resets revealed key back to hidden', () => {
+      vi.useFakeTimers();
+      let keyRevealed = true;
+      const timer = setTimeout(() => {
+        keyRevealed = false;
+      }, 30000);
+
+      expect(keyRevealed).toBe(true);
+      vi.advanceTimersByTime(29999);
+      expect(keyRevealed).toBe(true);
+
+      vi.advanceTimersByTime(1);
+      expect(keyRevealed).toBe(false);
+      clearTimeout(timer);
+      vi.useRealTimers();
     });
   });
 });

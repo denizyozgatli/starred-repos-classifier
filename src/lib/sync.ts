@@ -1,6 +1,6 @@
 import { getAuthenticatedUser, fetchStarredRepos, GitHubApiError } from '../core/github.ts';
 import { fetchUserStarLists, mergeStarLists } from '../core/star-lists.ts';
-import { classifyRepos, type ClassificationCache } from '../core/classify-repos.ts';
+import { classifyRepos, type ClassificationCache, LLM_OTHER_RETRY_MS } from '../core/classify-repos.ts';
 import { classifyWithRules, type ClassificationResult } from '../core/classifier.ts';
 import {
   createLLMClassifier,
@@ -11,7 +11,7 @@ import {
 import { RateLimiter } from '../core/rate-limiter.ts';
 import { computeInputHash } from '../core/hash.ts';
 import { buildDatasetEnvelope } from '../core/dataset.ts';
-import type { DatasetEnvelope } from '../types/repo.ts';
+import type { DatasetEnvelope, Repository } from '../types/repo.ts';
 import type { NormalizedRepo } from '../core/normalize.ts';
 import type { KeyValueStore } from './storage/datasetStore.ts';
 
@@ -120,6 +120,7 @@ export interface SyncProgress {
   llmErrors?: number;
   waitingMs?: number;
   isThrottled?: boolean;
+  message?: string;
 }
 
 export interface SyncStats {
@@ -134,6 +135,7 @@ export interface SyncResult {
   stats: SyncStats;
   llmStatus: LLMSyncStatus;
   llmErrors?: number;
+  aiCalls?: number;
   geminiStatus: LLMSyncStatus;
   geminiErrors?: number;
 }
@@ -439,9 +441,47 @@ export async function syncStarredRepos(options: SyncStarredReposOptions): Promis
       };
     }
 
-    const { repos: classifiedRepos, cache: updatedCache, cacheHits, newlyClassified } = await classifyRepos(
-      mergedRepos,
-      {
+    // Cache fast path: If ALL repos are cache hits, skip classification phase entirely
+    const isCacheHit = (r: NormalizedRepo): boolean => {
+      const hash = computeInputHash(r);
+      const cached = storedCache[r.fullName];
+      if (!cached || !cached.classification || cached.classification.inputHash !== hash) return false;
+      if (cached.classification.method === 'llm' && cached.category === 'Other') {
+        if (cached.classification.classifiedAt) {
+          const age = Date.now() - new Date(cached.classification.classifiedAt).getTime();
+          if (age >= LLM_OTHER_RETRY_MS) return false;
+        }
+      }
+      return true;
+    };
+
+    const allCacheHits = mergedRepos.length > 0 && mergedRepos.every(isCacheHit);
+
+    let classifiedRepos: Repository[];
+    let updatedCache: ClassificationCache;
+    let cacheHits = 0;
+    let newlyClassified = 0;
+
+    if (allCacheHits) {
+      cacheHits = mergedRepos.length;
+      newlyClassified = 0;
+      updatedCache = storedCache;
+      classifiedRepos = mergedRepos.map(r => ({
+        ...r,
+        category: storedCache[r.fullName].category,
+        classification: storedCache[r.fullName].classification,
+      }));
+
+      const msg = `Classification: ${mergedRepos.length}/${mergedRepos.length} from cache, 0 AI calls`;
+      console.log(`[sync] ${msg}`);
+      onProgress?.({
+        phase: 'classifying',
+        done: mergedRepos.length,
+        total: mergedRepos.length,
+        message: msg,
+      });
+    } else {
+      const res = await classifyRepos(mergedRepos, {
         cache: storedCache,
         signal,
         llmClassify,
@@ -454,8 +494,12 @@ export async function syncStarredRepos(options: SyncStarredReposOptions): Promis
             currentRepo: repo.name,
           });
         },
-      }
-    );
+      });
+      classifiedRepos = res.repos;
+      updatedCache = res.cache;
+      cacheHits = res.cacheHits;
+      newlyClassified = res.newlyClassified;
+    }
 
     if (effectiveLlm && effectiveLlm.apiKey.trim()) {
       if (invalidKey) {
@@ -494,10 +538,103 @@ export async function syncStarredRepos(options: SyncStarredReposOptions): Promis
       },
       llmStatus,
       llmErrors: llmErrorCount > 0 ? llmErrorCount : undefined,
+      aiCalls: llmAttemptCount,
       geminiStatus: llmStatus,
       geminiErrors: llmErrorCount > 0 ? llmErrorCount : undefined,
     };
   } catch (err) {
     throw mapToSyncError(err);
   }
+}
+
+export interface ResetAIOptions {
+  store: KeyValueStore;
+  signal?: AbortSignal;
+  onProgress?: (progress: SyncProgress) => void;
+}
+
+export interface ResetAIResult {
+  resetCount: number;
+}
+
+/**
+ * Reverts all LLM-classified repositories to fallback/Other, leaving rule-based entries intact.
+ * Updates and persists both classificationCache and dataset to store.
+ */
+export async function resetAIClassifications(options: ResetAIOptions): Promise<ResetAIResult> {
+  const { store, signal, onProgress } = options;
+
+  if (signal?.aborted) {
+    const err = new Error('Operation aborted');
+    err.name = 'AbortError';
+    throw signal.reason || err;
+  }
+
+  const cache = (await store.get<ClassificationCache>('classificationCache')) || {};
+  const dataset = await store.get<DatasetEnvelope>('dataset');
+
+  if (signal?.aborted) {
+    const err = new Error('Operation aborted');
+    err.name = 'AbortError';
+    throw signal.reason || err;
+  }
+
+  const llmKeys = Object.keys(cache).filter(k => cache[k]?.classification?.method === 'llm');
+  const resetCount = llmKeys.length;
+
+  if (resetCount === 0) {
+    return { resetCount: 0 };
+  }
+
+  const newCache: ClassificationCache = {};
+  for (const [k, v] of Object.entries(cache)) {
+    if (v?.classification?.method !== 'llm') {
+      newCache[k] = v;
+    }
+  }
+
+  let updatedDataset: DatasetEnvelope | null = null;
+  if (dataset && Array.isArray(dataset.repos)) {
+    const updatedRepos = dataset.repos.map(repo => {
+      if (repo.classification?.method === 'llm') {
+        return {
+          ...repo,
+          category: 'Other' as const,
+          classification: {
+            method: 'fallback' as const,
+            confidence: 0.5,
+            classifiedAt: new Date().toISOString(),
+            inputHash: repo.classification.inputHash,
+          },
+        };
+      }
+      return repo;
+    });
+
+    updatedDataset = {
+      ...dataset,
+      repos: updatedRepos,
+      generatedAt: new Date().toISOString(),
+    };
+  }
+
+  if (signal?.aborted) {
+    const err = new Error('Operation aborted');
+    err.name = 'AbortError';
+    throw signal.reason || err;
+  }
+
+  // Persist updated cache and dataset
+  await store.set('classificationCache', newCache);
+  if (updatedDataset) {
+    await store.set('dataset', updatedDataset);
+  }
+
+  onProgress?.({
+    phase: 'classifying',
+    done: resetCount,
+    total: resetCount,
+  });
+
+  return { resetCount };
 }

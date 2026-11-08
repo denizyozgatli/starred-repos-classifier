@@ -301,6 +301,48 @@ describe('LLM & Multi-Provider Core (src/core/llm.ts & src/core/llm-providers.ts
       limiter.setMinIntervalMs(-100);
       expect(limiter.getMinIntervalMs()).toBe(0);
     });
+
+    it('RateLimiter acquire aborts promptly during rate-limiter wait', async () => {
+      const limiter = new RateLimiter({ minIntervalMs: 10000 });
+      // First acquire sets lastRequestTime
+      await limiter.acquire();
+
+      const controller = new AbortController();
+      const startTime = Date.now();
+
+      // Abort after 20ms of the 10000ms delay
+      setTimeout(() => controller.abort(), 20);
+
+      await expect(limiter.acquire(controller.signal)).rejects.toThrow('aborted');
+      const elapsed = Date.now() - startTime;
+      expect(elapsed).toBeLessThan(1000);
+    });
+
+    it('executeWithRetry aborts promptly during retry backoff wait', async () => {
+      const controller = new AbortController();
+      let attempts = 0;
+      const startTime = Date.now();
+
+      // Abort after 20ms of the 30000ms delay
+      setTimeout(() => controller.abort(), 20);
+
+      await expect(
+        executeWithRetry(
+          async () => {
+            attempts++;
+            throw new LLMRateLimitError('google', 'Rate limit', { retryAfterSec: 30 });
+          },
+          {
+            maxRetries: 2,
+            signal: controller.signal,
+          }
+        )
+      ).rejects.toThrow('aborted');
+
+      const elapsed = Date.now() - startTime;
+      expect(elapsed).toBeLessThan(1000);
+      expect(attempts).toBe(1);
+    });
   });
 
   describe('Adaptive Request Interval (Auto mode)', () => {

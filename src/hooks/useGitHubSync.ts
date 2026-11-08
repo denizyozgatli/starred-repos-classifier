@@ -3,17 +3,19 @@ import type { DatasetEnvelope } from '../types/repo.ts';
 import {
   syncStarredRepos,
   shouldAutoRefresh,
+  resetAIClassifications,
   type SyncProgress,
   type SyncPhase,
   type SyncError,
   type LLMSyncStatus,
   type GeminiSyncStatus,
   type LLMSyncOptions,
+  type ResetAIResult,
   mapToSyncError,
   resolveSyncFailure,
 } from '../lib/sync.ts';
 import { loadToken, saveToken, clearToken, loadLlmSettings, saveLlmSettings, isModelAuto } from '../lib/storage/settings.ts';
-import { createDefaultStore, type KeyValueStore } from '../lib/storage/datasetStore.ts';
+import { createDefaultStore, appendSyncLog, type KeyValueStore } from '../lib/storage/datasetStore.ts';
 import { getLLMProvider, type LLMProviderId } from '../core/llm-providers.ts';
 import { PROVIDER_DEFAULTS } from '../core/llm.ts';
 import { createActivityLog, type ActivityLog, type ActivityLogEntry, type ActivityLogKind } from '../lib/activityLog.ts';
@@ -57,6 +59,8 @@ export interface UseGitHubSyncReturn extends GitHubSyncState {
   fetchLlmModels: (providerId: LLMProviderId, apiKey: string) => Promise<string[]>;
   activityLog: ReadonlyArray<ActivityLogEntry>;
   clearActivityLog: () => void;
+  resetAI: () => Promise<ResetAIResult>;
+  store: KeyValueStore;
 }
 
 export function useGitHubSync(options: UseGitHubSyncOptions = {}): UseGitHubSyncReturn {
@@ -79,10 +83,31 @@ export function useGitHubSync(options: UseGitHubSyncOptions = {}): UseGitHubSync
   const activityLogRef = useRef<ActivityLog>(createActivityLog(50));
   const [activityLogSnapshot, setActivityLogSnapshot] = useState<ReadonlyArray<ActivityLogEntry>>([]);
 
-  const addLogEntry = useCallback((entry: { text: string; kind?: ActivityLogKind }) => {
-    activityLogRef.current.add(entry);
-    setActivityLogSnapshot(activityLogRef.current.entries());
-  }, []);
+  const addLogEntry = useCallback(
+    (entry: { text: string; kind?: ActivityLogKind }) => {
+      activityLogRef.current.add(entry);
+      setActivityLogSnapshot(activityLogRef.current.entries());
+
+      // Mirror to persistent IndexedDB log with secret filtering
+      const storedKeys: string[] = [];
+      const token = loadToken();
+      if (token) storedKeys.push(token);
+      try {
+        const llmSettings = loadLlmSettings();
+        for (const p of Object.values(llmSettings.providers)) {
+          if (p?.apiKey?.trim()) storedKeys.push(p.apiKey.trim());
+        }
+      } catch {
+        // ignore
+      }
+
+      appendSyncLog(
+        { ts: Date.now(), text: entry.text, kind: entry.kind ?? 'info' },
+        { store, storedKeys }
+      ).catch(() => {});
+    },
+    [store]
+  );
 
   const clearActivityLog = useCallback(() => {
     activityLogRef.current.clear();
@@ -163,8 +188,12 @@ export function useGitHubSync(options: UseGitHubSyncOptions = {}): UseGitHubSync
             if (p.phase === 'fetching') {
               addLogEntry({ text: `Fetching stars — page ${p.page ?? 1}`, kind: 'info' });
             } else if (p.phase === 'classifying') {
-              const repoName = p.repoName ?? p.currentRepo ?? '';
-              addLogEntry({ text: `Classifying ${p.done} / ${p.total || '?'} — ${repoName}`, kind: 'info' });
+              if (p.message) {
+                addLogEntry({ text: p.message, kind: 'info' });
+              } else {
+                const repoName = p.repoName ?? p.currentRepo ?? '';
+                addLogEntry({ text: `Classifying ${p.done} / ${p.total || '?'} — ${repoName}`, kind: 'info' });
+              }
             } else if (p.phase === 'llm') {
               const repoName = p.repoName ?? p.currentRepo ?? '';
               addLogEntry({ text: `${providerLabel} · ${p.done} / ${p.total || '?'} — ${repoName}`, kind: 'info' });
@@ -188,8 +217,9 @@ export function useGitHubSync(options: UseGitHubSyncOptions = {}): UseGitHubSync
         const nAI = repos.filter(r => r.classification?.method === 'llm').length;
         const nOther = repos.filter(r => r.category === 'Other').length;
         const nErrors = result.llmErrors ?? 0;
+        const nAiCalls = result.aiCalls ?? 0;
         addLogEntry({
-          text: `Sync finished: ${total} repos, ${nRule} rule-based, ${nAI} AI, ${nOther} Other, ${nErrors} errors`,
+          text: `Sync finished: ${total} repos, ${nRule} rule-based, ${nAI} AI, ${nAiCalls} AI calls, ${nOther} Other, ${nErrors} errors`,
           kind: 'success',
         });
 
@@ -342,6 +372,59 @@ export function useGitHubSync(options: UseGitHubSyncOptions = {}): UseGitHubSync
     [runSync]
   );
 
+  const resetAI = useCallback(async (): Promise<ResetAIResult> => {
+    if (status === 'syncing' || isBackgroundRefreshing) {
+      return { resetCount: 0 };
+    }
+
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+
+    try {
+      const { resetCount } = await resetAIClassifications({
+        store,
+        signal: controller.signal,
+      });
+
+      if (resetCount > 0) {
+        setDataset(prev => {
+          if (!prev || !Array.isArray(prev.repos)) return prev;
+          const updatedRepos = prev.repos.map(repo => {
+            if (repo.classification?.method === 'llm') {
+              return {
+                ...repo,
+                category: 'Other' as const,
+                classification: {
+                  method: 'fallback' as const,
+                  confidence: 0.5,
+                  classifiedAt: new Date().toISOString(),
+                  inputHash: repo.classification.inputHash,
+                },
+              };
+            }
+            return repo;
+          });
+          return {
+            ...prev,
+            repos: updatedRepos,
+            generatedAt: new Date().toISOString(),
+          };
+        });
+
+        addLogEntry({
+          text: `Reset AI classifications: ${resetCount} repos reverted to Other`,
+          kind: 'warn',
+        });
+      }
+
+      return { resetCount };
+    } finally {
+      if (abortControllerRef.current === controller) {
+        abortControllerRef.current = null;
+      }
+    }
+  }, [status, isBackgroundRefreshing, store, addLogEntry]);
+
   const fetchLlmModels = useCallback(
     async (providerId: LLMProviderId, apiKey: string): Promise<string[]> => {
       const provider = getLLMProvider(providerId);
@@ -430,5 +513,7 @@ export function useGitHubSync(options: UseGitHubSyncOptions = {}): UseGitHubSync
     fetchLlmModels,
     activityLog: activityLogSnapshot,
     clearActivityLog,
+    resetAI,
+    store,
   };
 }
