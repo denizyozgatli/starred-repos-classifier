@@ -5,17 +5,18 @@ import {
   shouldAutoRefresh,
   type SyncProgress,
   type SyncError,
+  type GeminiSyncStatus,
   mapToSyncError,
   resolveSyncFailure,
 } from '../lib/sync.ts';
-import { loadToken, saveToken, clearToken } from '../lib/storage/settings.ts';
+import { loadToken, saveToken, clearToken, loadGeminiKey, loadGeminiSettings } from '../lib/storage/settings.ts';
 import { createDefaultStore, type KeyValueStore } from '../lib/storage/datasetStore.ts';
 
 export type SyncStatus = 'idle' | 'syncing' | 'ready' | 'error';
 
 export interface GitHubSyncState {
   status: SyncStatus;
-  phase: 'fetching' | 'classifying' | null;
+  phase: 'fetching' | 'classifying' | 'llm' | null;
   progress: SyncProgress;
   error: SyncError | null;
   lastSyncAt: string | null;
@@ -23,6 +24,8 @@ export interface GitHubSyncState {
   listsUnavailable: boolean;
   isBackgroundRefreshing: boolean;
   tokenExpiredNotice: string | null;
+  geminiStatus: GeminiSyncStatus;
+  geminiErrors?: number;
   dataset: DatasetEnvelope | null;
 }
 
@@ -34,16 +37,18 @@ export interface UseGitHubSyncOptions {
 export interface UseGitHubSyncReturn extends GitHubSyncState {
   connect: (token: string, remember: boolean) => Promise<boolean>;
   refresh: () => Promise<void>;
+  reclassifyOther: () => Promise<boolean>;
   cancel: () => void;
   disconnect: () => Promise<void>;
   clearError: () => void;
   clearTokenExpiredNotice: () => void;
+  clearGeminiNotice: () => void;
 }
 
 export function useGitHubSync(options: UseGitHubSyncOptions = {}): UseGitHubSyncReturn {
   const [store] = useState<KeyValueStore>(() => options.store ?? createDefaultStore());
   const [status, setStatus] = useState<SyncStatus>('idle');
-  const [phase, setPhase] = useState<'fetching' | 'classifying' | null>(null);
+  const [phase, setPhase] = useState<'fetching' | 'classifying' | 'llm' | null>(null);
   const [progress, setProgress] = useState<SyncProgress>({ phase: 'fetching', done: 0 });
   const [error, setError] = useState<SyncError | null>(null);
   const [lastSyncAt, setLastSyncAt] = useState<string | null>(null);
@@ -51,12 +56,18 @@ export function useGitHubSync(options: UseGitHubSyncOptions = {}): UseGitHubSync
   const [listsUnavailable, setListsUnavailable] = useState<boolean>(false);
   const [isBackgroundRefreshing, setIsBackgroundRefreshing] = useState<boolean>(false);
   const [tokenExpiredNotice, setTokenExpiredNotice] = useState<string | null>(null);
+  const [geminiStatus, setGeminiStatus] = useState<GeminiSyncStatus>('disabled');
+  const [geminiErrors, setGeminiErrors] = useState<number | undefined>(undefined);
   const [dataset, setDataset] = useState<DatasetEnvelope | null>(null);
 
   const abortControllerRef = useRef<AbortController | null>(null);
 
   const runSync = useCallback(
-    async (token: string, isBackground: boolean = false): Promise<boolean> => {
+    async (
+      token: string,
+      isBackground: boolean = false,
+      syncOpts: { ignoreOtherCache?: boolean } = {}
+    ): Promise<boolean> => {
       // Abort any existing operation
       if (abortControllerRef.current) {
         abortControllerRef.current.abort();
@@ -76,10 +87,22 @@ export function useGitHubSync(options: UseGitHubSyncOptions = {}): UseGitHubSync
       }
 
       try {
+        const storedGeminiKey = loadGeminiKey();
+        const storedGeminiSettings = loadGeminiSettings();
+        const geminiConfig = storedGeminiKey
+          ? {
+              apiKey: storedGeminiKey,
+              model: storedGeminiSettings.model,
+              minIntervalMs: storedGeminiSettings.intervalSec * 1000,
+            }
+          : undefined;
+
         const result = await syncStarredRepos({
           token,
           store,
           signal: controller.signal,
+          gemini: geminiConfig,
+          ignoreOtherCache: syncOpts.ignoreOtherCache,
           onProgress: p => {
             setPhase(p.phase);
             setProgress(p);
@@ -89,6 +112,8 @@ export function useGitHubSync(options: UseGitHubSyncOptions = {}): UseGitHubSync
         setDataset(result.envelope);
         setListsUnavailable(result.listsUnavailable);
         setViewerLogin(result.envelope.username || null);
+        setGeminiStatus(result.geminiStatus);
+        setGeminiErrors(result.geminiErrors);
         const nowIso = new Date().toISOString();
         setLastSyncAt(nowIso);
         setStatus('ready');
@@ -217,6 +242,12 @@ export function useGitHubSync(options: UseGitHubSyncOptions = {}): UseGitHubSync
     await runSync(token, Boolean(dataset));
   }, [runSync, dataset]);
 
+  const reclassifyOther = useCallback(async (): Promise<boolean> => {
+    const token = loadToken();
+    if (!token) return false;
+    return runSync(token, false, { ignoreOtherCache: true });
+  }, [runSync]);
+
   const cancel = useCallback((): void => {
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();
@@ -256,6 +287,10 @@ export function useGitHubSync(options: UseGitHubSyncOptions = {}): UseGitHubSync
     setTokenExpiredNotice(null);
   }, []);
 
+  const clearGeminiNotice = useCallback((): void => {
+    setGeminiStatus('disabled');
+  }, []);
+
   return {
     status,
     phase,
@@ -266,12 +301,16 @@ export function useGitHubSync(options: UseGitHubSyncOptions = {}): UseGitHubSync
     listsUnavailable,
     isBackgroundRefreshing,
     tokenExpiredNotice,
+    geminiStatus,
+    geminiErrors,
     dataset,
     connect,
     refresh,
+    reclassifyOther,
     cancel,
     disconnect,
     clearError,
     clearTokenExpiredNotice,
+    clearGeminiNotice,
   };
 }

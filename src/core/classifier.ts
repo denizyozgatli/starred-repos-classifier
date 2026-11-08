@@ -631,7 +631,7 @@ export function classifyWithRulesDebug(repo: NormalizedRepo): ClassificationDebu
   const resolved = resolveCategory(intentScores, domainScores, repo.name, repoDesc);
 
   // Build traditional debug structure for backwards compatibility
-  const scores: Record<RepositoryCategory, RuleDebugInfo> = {} as any;
+  const scores = {} as Partial<Record<RepositoryCategory, RuleDebugInfo>> as Record<RepositoryCategory, RuleDebugInfo>;
   for (const cat of ALLOWED_CATEGORIES) {
     scores[cat] = {
       category: cat,

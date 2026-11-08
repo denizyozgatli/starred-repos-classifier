@@ -1,5 +1,5 @@
 import React, { useMemo } from 'react';
-import { Star, Upload, RefreshCw, LogOut } from 'lucide-react';
+import { Star, Upload, RefreshCw, LogOut, Settings } from 'lucide-react';
 import type { Repository } from '../types/repo.ts';
 import type { ExportFilterContext } from '../lib/export.ts';
 import { ExportMenu } from './ExportMenu.tsx';
@@ -33,6 +33,8 @@ interface HeaderProps {
   isSyncing?: boolean;
   onRefresh?: () => void;
   onDisconnect?: () => void;
+  onOpenSettings?: () => void;
+  hasGeminiKey?: boolean;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -52,6 +54,8 @@ export const Header: React.FC<HeaderProps> = ({
   isSyncing = false,
   onRefresh,
   onDisconnect,
+  onOpenSettings,
+  hasGeminiKey = false,
 }) => {
   const isFiltered = totalCount !== filteredCount;
   const relativeSyncTime = useMemo(() => formatRelativeTime(lastSyncAt ?? null), [lastSyncAt]);
@@ -164,6 +168,24 @@ export const Header: React.FC<HeaderProps> = ({
               filteredRepos={filteredRepos}
               filterContext={filterContext}
             />
+
+            {onOpenSettings && (
+              <button
+                type="button"
+                onClick={onOpenSettings}
+                className="relative inline-flex items-center justify-center p-2 text-github-muted hover:text-white rounded-lg hover:bg-[#21262d] border border-[#30363d] focus-visible:ring-2 focus-visible:ring-[#58a6ff] focus-visible:outline-none transition-colors cursor-pointer"
+                title="Classification settings"
+                aria-label="Open classification settings"
+              >
+                <Settings className="w-3.5 h-3.5" aria-hidden="true" />
+                {hasGeminiKey && (
+                  <span
+                    className="absolute top-1.5 right-1.5 w-1.5 h-1.5 rounded-full bg-[#3fb950]"
+                    title="Gemini API key configured"
+                  />
+                )}
+              </button>
+            )}
           </div>
 
           <div

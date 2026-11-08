@@ -17,7 +17,7 @@ interface ConnectGitHubProps {
   onCancel?: () => void;
   onOpenImport: () => void;
   isSyncing?: boolean;
-  phase?: 'fetching' | 'classifying' | null;
+  phase?: 'fetching' | 'classifying' | 'llm' | null;
   progress?: SyncProgress;
   error?: string | null;
   onClearError?: () => void;
@@ -53,7 +53,8 @@ export const ConnectGitHub: React.FC<ConnectGitHubProps> = ({
 
   // 1. Syncing State
   if (isSyncing) {
-    const isClassifying = phase === 'classifying';
+    const isLlm = phase === 'llm';
+    const isClassifying = phase === 'classifying' || isLlm;
     const total = progress?.total ?? 0;
     const done = progress?.done ?? 0;
     const percent = total > 0 ? Math.min(100, Math.round((done / total) * 100)) : 0;
@@ -69,7 +70,12 @@ export const ConnectGitHub: React.FC<ConnectGitHubProps> = ({
             Syncing Starred Repositories
           </h2>
           <p className="text-xs text-github-muted" aria-live="polite">
-            {isClassifying ? (
+            {isLlm ? (
+              <span>
+                Classifying with Gemini: <strong className="text-white font-mono">{done}</strong> /{' '}
+                <span className="font-mono">{total || '…'}</span>
+              </span>
+            ) : isClassifying ? (
               <span>
                 Classifying repositories: <strong className="text-white font-mono">{done}</strong> /{' '}
                 <span className="font-mono">{total || '…'}</span>
