@@ -48,18 +48,18 @@ export function mapToSyncError(err: unknown): SyncError {
   if (err instanceof GitHubApiError) {
     if (err.status === 401) {
       return new SyncError(
-        'Invalid GitHub personal access token. Please verify your token and permissions.',
+        'GitHub authentication failed: invalid or expired token.',
         'invalid_token',
         { status: 401, cause: err }
       );
     }
 
-    if (
-      err.isRateLimit ||
+    const isRateLimit =
+      err.isRateLimit === true ||
       err.status === 429 ||
-      (err.status === 403 && err.rateLimitRemaining === 0) ||
-      (err.status === 403 && Boolean(err.rateLimitReset))
-    ) {
+      (err.status === 403 && err.rateLimitRemaining === 0);
+
+    if (isRateLimit) {
       const resetDate = err.rateLimitReset;
       const resetStr = resetDate ? ` Resets at ${resetDate.toLocaleTimeString()}.` : '';
       return new SyncError(
@@ -71,7 +71,7 @@ export function mapToSyncError(err: unknown): SyncError {
 
     if (err.status === 403) {
       return new SyncError(
-        err.message || 'Token has insufficient permissions to read starred repositories.',
+        'This token cannot read your stars. Edit the token and set Account permissions → Starring → Read-only.',
         'insufficient_permissions',
         { status: 403, cause: err }
       );
@@ -150,6 +150,39 @@ export function shouldAutoRefresh(
   if (Number.isNaN(currentTime)) return true;
 
   return currentTime - lastSyncTime >= maxAgeMs;
+}
+
+export interface SyncFailureResolution {
+  shouldClearToken: boolean;
+  bannerMessage: string | null;
+  keepCachedDataset: boolean;
+  showConnectScreen: boolean;
+}
+
+/**
+ * Determines error handling policy for sync failures.
+ * If token is invalid (401), clears the stored token and provides
+ * a banner message if a cached dataset exists to prevent data disappearance.
+ */
+export function resolveSyncFailure(
+  error: SyncError,
+  hasCachedDataset: boolean
+): SyncFailureResolution {
+  if (error.code === 'invalid_token') {
+    return {
+      shouldClearToken: true,
+      bannerMessage: hasCachedDataset ? 'Your token is no longer valid — reconnect' : null,
+      keepCachedDataset: hasCachedDataset,
+      showConnectScreen: !hasCachedDataset,
+    };
+  }
+
+  return {
+    shouldClearToken: false,
+    bannerMessage: null,
+    keepCachedDataset: hasCachedDataset,
+    showConnectScreen: !hasCachedDataset,
+  };
 }
 
 /**

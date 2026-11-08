@@ -6,6 +6,7 @@ import {
   type SyncProgress,
   type SyncError,
   mapToSyncError,
+  resolveSyncFailure,
 } from '../lib/sync.ts';
 import { loadToken, saveToken, clearToken } from '../lib/storage/settings.ts';
 import { createDefaultStore, type KeyValueStore } from '../lib/storage/datasetStore.ts';
@@ -21,6 +22,7 @@ export interface GitHubSyncState {
   viewerLogin: string | null;
   listsUnavailable: boolean;
   isBackgroundRefreshing: boolean;
+  tokenExpiredNotice: string | null;
   dataset: DatasetEnvelope | null;
 }
 
@@ -35,6 +37,7 @@ export interface UseGitHubSyncReturn extends GitHubSyncState {
   cancel: () => void;
   disconnect: () => Promise<void>;
   clearError: () => void;
+  clearTokenExpiredNotice: () => void;
 }
 
 export function useGitHubSync(options: UseGitHubSyncOptions = {}): UseGitHubSyncReturn {
@@ -47,6 +50,7 @@ export function useGitHubSync(options: UseGitHubSyncOptions = {}): UseGitHubSync
   const [viewerLogin, setViewerLogin] = useState<string | null>(null);
   const [listsUnavailable, setListsUnavailable] = useState<boolean>(false);
   const [isBackgroundRefreshing, setIsBackgroundRefreshing] = useState<boolean>(false);
+  const [tokenExpiredNotice, setTokenExpiredNotice] = useState<string | null>(null);
   const [dataset, setDataset] = useState<DatasetEnvelope | null>(null);
 
   const abortControllerRef = useRef<AbortController | null>(null);
@@ -107,14 +111,25 @@ export function useGitHubSync(options: UseGitHubSyncOptions = {}): UseGitHubSync
         }
 
         setError(syncErr);
+
         setDataset(prev => {
-          if (prev && isBackground) {
-            // Keep existing dataset during background refresh failure
+          const resolution = resolveSyncFailure(syncErr, Boolean(prev));
+          if (resolution.shouldClearToken) {
+            clearToken();
+          }
+          if (resolution.bannerMessage) {
+            setTokenExpiredNotice(resolution.bannerMessage);
+          } else if (syncErr.code !== 'invalid_token') {
+            setTokenExpiredNotice(null);
+          }
+
+          if (resolution.keepCachedDataset && prev) {
             setStatus('ready');
+            return prev;
           } else {
             setStatus('error');
+            return null;
           }
-          return prev;
         });
         return false;
       } finally {
@@ -178,8 +193,12 @@ export function useGitHubSync(options: UseGitHubSyncOptions = {}): UseGitHubSync
 
   const connect = useCallback(
     async (token: string, remember: boolean): Promise<boolean> => {
-      saveToken(token, remember);
-      return runSync(token, false);
+      const ok = await runSync(token, false);
+      if (ok) {
+        saveToken(token, remember);
+        setTokenExpiredNotice(null);
+      }
+      return ok;
     },
     [runSync]
   );
@@ -224,12 +243,17 @@ export function useGitHubSync(options: UseGitHubSyncOptions = {}): UseGitHubSync
     setLastSyncAt(null);
     setViewerLogin(null);
     setListsUnavailable(false);
+    setTokenExpiredNotice(null);
     setError(null);
     setStatus('idle');
   }, [cancel, store]);
 
   const clearError = useCallback((): void => {
     setError(null);
+  }, []);
+
+  const clearTokenExpiredNotice = useCallback((): void => {
+    setTokenExpiredNotice(null);
   }, []);
 
   return {
@@ -241,11 +265,13 @@ export function useGitHubSync(options: UseGitHubSyncOptions = {}): UseGitHubSync
     viewerLogin,
     listsUnavailable,
     isBackgroundRefreshing,
+    tokenExpiredNotice,
     dataset,
     connect,
     refresh,
     cancel,
     disconnect,
     clearError,
+    clearTokenExpiredNotice,
   };
 }

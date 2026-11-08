@@ -171,6 +171,23 @@ export default function App() {
       />
 
       <main className="flex-1 max-w-7xl mx-auto w-full px-3.5 sm:px-8 py-4 sm:py-6 space-y-3.5 sm:space-y-4">
+        {/* Token Expired / Invalid Banner */}
+        {sync.tokenExpiredNotice && (
+          <div className="bg-[#161b22] border border-[#f85149]/40 rounded-xl px-4 py-2.5 flex items-center justify-between text-xs text-[#ff7b72] animate-in fade-in">
+            <div className="flex items-center gap-2">
+              <AlertTriangle className="w-4 h-4 shrink-0 text-[#f85149]" aria-hidden="true" />
+              <span>{sync.tokenExpiredNotice}</span>
+            </div>
+            <button
+              type="button"
+              onClick={() => sync.disconnect()}
+              className="text-xs font-semibold text-white bg-[#21262d] hover:bg-[#30363d] border border-[#30363d] px-2.5 py-1 rounded-md transition-colors cursor-pointer"
+            >
+              Reconnect
+            </button>
+          </div>
+        )}
+
         {/* Background Refresh Notice */}
         {sync.isBackgroundRefreshing && sync.dataset && (
           <div className="bg-[#161b22] border border-[#30363d] rounded-xl px-4 py-2.5 flex items-center justify-between text-xs text-github-muted animate-in fade-in">

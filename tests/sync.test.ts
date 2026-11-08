@@ -1,5 +1,11 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { syncStarredRepos, shouldAutoRefresh, SyncError, DEFAULT_MAX_CACHE_AGE_MS } from '../src/lib/sync.ts';
+import {
+  syncStarredRepos,
+  shouldAutoRefresh,
+  SyncError,
+  DEFAULT_MAX_CACHE_AGE_MS,
+  resolveSyncFailure,
+} from '../src/lib/sync.ts';
 import { MemoryStore } from '../src/lib/storage/datasetStore.ts';
 import { saveToken, loadToken, clearToken, isTokenRemembered } from '../src/lib/storage/settings.ts';
 import type { DatasetEnvelope } from '../src/types/repo.ts';
@@ -320,6 +326,100 @@ describe('Sync Engine & Storage', () => {
       expect(await store.get('dataset')).toBeNull();
     });
 
+    it('403 with x-ratelimit-remaining: 59 and x-ratelimit-reset present -> insufficient_permissions (NOT rate_limited)', async () => {
+      const store = new MemoryStore();
+      const futureSec = Math.floor(Date.now() / 1000) + 3600;
+
+      globalThis.fetch = async () => {
+        return new Response(
+          JSON.stringify({ message: 'Resource not accessible by personal access token' }),
+          {
+            status: 403,
+            headers: {
+              'Content-Type': 'application/json',
+              'x-ratelimit-remaining': '59',
+              'x-ratelimit-reset': String(futureSec),
+            },
+          }
+        );
+      };
+
+      await expect(
+        syncStarredRepos({
+          token: 'ghp_no_permissions',
+          store,
+        })
+      ).rejects.toSatisfy((err: unknown) => {
+        expect(err).toBeInstanceOf(SyncError);
+        const syncErr = err as SyncError;
+        expect(syncErr.code).toBe('insufficient_permissions');
+        expect(syncErr.status).toBe(403);
+        expect(syncErr.message).toContain('This token cannot read your stars');
+        return true;
+      });
+
+      expect(await store.get('dataset')).toBeNull();
+    });
+
+    it('403 with retry-after -> rate_limited', async () => {
+      const store = new MemoryStore();
+
+      globalThis.fetch = async () => {
+        return new Response(
+          JSON.stringify({ message: 'You have exceeded a secondary rate limit' }),
+          {
+            status: 403,
+            headers: {
+              'Content-Type': 'application/json',
+              'retry-after': '120',
+            },
+          }
+        );
+      };
+
+      await expect(
+        syncStarredRepos({
+          token: 'ghp_secondary_rate_limited',
+          store,
+        })
+      ).rejects.toSatisfy((err: unknown) => {
+        expect(err).toBeInstanceOf(SyncError);
+        const syncErr = err as SyncError;
+        expect(syncErr.code).toBe('rate_limited');
+        expect(syncErr.status).toBe(403);
+        expect(syncErr.resetTime).toBeInstanceOf(Date);
+        return true;
+      });
+
+      expect(await store.get('dataset')).toBeNull();
+    });
+
+    it('429 -> rate_limited', async () => {
+      const store = new MemoryStore();
+
+      globalThis.fetch = async () => {
+        return new Response(JSON.stringify({ message: 'Too Many Requests' }), {
+          status: 429,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      };
+
+      await expect(
+        syncStarredRepos({
+          token: 'ghp_too_many_requests',
+          store,
+        })
+      ).rejects.toSatisfy((err: unknown) => {
+        expect(err).toBeInstanceOf(SyncError);
+        const syncErr = err as SyncError;
+        expect(syncErr.code).toBe('rate_limited');
+        expect(syncErr.status).toBe(429);
+        return true;
+      });
+
+      expect(await store.get('dataset')).toBeNull();
+    });
+
     it('abort mid-fetch -> aborted error, previous stored dataset unchanged', async () => {
       const store = new MemoryStore();
       const originalEnvelope: DatasetEnvelope = {
@@ -405,6 +505,38 @@ describe('Sync Engine & Storage', () => {
       const secondResult = await syncStarredRepos({ token: 'ghp_test', store });
       expect(secondResult.stats.cacheHits).toBe(1);
       expect(secondResult.stats.newlyClassified).toBe(0);
+    });
+  });
+
+  describe('resolveSyncFailure', () => {
+    it('clears token and provides banner when cached dataset exists', () => {
+      const error = new SyncError('401 Bad credentials', 'invalid_token');
+      const res = resolveSyncFailure(error, true);
+      expect(res.shouldClearToken).toBe(true);
+      expect(res.bannerMessage).toBe('Your token is no longer valid — reconnect');
+      expect(res.keepCachedDataset).toBe(true);
+      expect(res.showConnectScreen).toBe(false);
+    });
+
+    it('clears token and shows connect screen when no cached dataset exists', () => {
+      const error = new SyncError('401 Bad credentials', 'invalid_token');
+      const res = resolveSyncFailure(error, false);
+      expect(res.shouldClearToken).toBe(true);
+      expect(res.bannerMessage).toBeNull();
+      expect(res.keepCachedDataset).toBe(false);
+      expect(res.showConnectScreen).toBe(true);
+    });
+
+    it('does not clear token for rate limits or network errors', () => {
+      const rateLimitErr = new SyncError('Rate limit', 'rate_limited');
+      const res1 = resolveSyncFailure(rateLimitErr, true);
+      expect(res1.shouldClearToken).toBe(false);
+      expect(res1.keepCachedDataset).toBe(true);
+
+      const networkErr = new SyncError('Network failure', 'network');
+      const res2 = resolveSyncFailure(networkErr, false);
+      expect(res2.shouldClearToken).toBe(false);
+      expect(res2.showConnectScreen).toBe(true);
     });
   });
 });

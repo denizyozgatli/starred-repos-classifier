@@ -38,7 +38,7 @@ export class GitHubApiError extends Error {
     this.statusText = statusText;
     this.rateLimitReset = rateLimitReset;
     this.rateLimitRemaining = rateLimitRemaining;
-    this.isRateLimit = isRateLimit ?? (Boolean(rateLimitReset) || status === 429);
+    this.isRateLimit = isRateLimit ?? (status === 429 || rateLimitRemaining === 0);
   }
 }
 
@@ -56,14 +56,30 @@ function getGitHubHeaders(token?: string): Record<string, string> {
   return headers;
 }
 
-function handleGitHubErrors(response: Response, username?: string): void {
+async function handleGitHubErrors(response: Response, username?: string): Promise<void> {
   const remainingHeader = response.headers?.get('x-ratelimit-remaining');
   const remaining = remainingHeader !== null && remainingHeader !== undefined ? parseInt(remainingHeader, 10) : undefined;
   const resetTimestamp = response.headers?.get('x-ratelimit-reset');
   const resetDate = resetTimestamp ? new Date(parseInt(resetTimestamp, 10) * 1000) : undefined;
 
+  const retryAfterHeader = response.headers?.get('retry-after');
+  let retryAfterDate: Date | undefined;
+  if (retryAfterHeader) {
+    const seconds = parseInt(retryAfterHeader, 10);
+    if (!Number.isNaN(seconds)) {
+      retryAfterDate = new Date(Date.now() + seconds * 1000);
+    } else {
+      const parsed = Date.parse(retryAfterHeader);
+      if (!Number.isNaN(parsed)) {
+        retryAfterDate = new Date(parsed);
+      }
+    }
+  }
+
+  const effectiveResetDate = retryAfterDate || resetDate;
+
   if (response.status === 401) {
-    throw new GitHubApiError('GitHub authentication failed: Invalid or expired GITHUB_TOKEN.', 401, response.statusText);
+    throw new GitHubApiError('GitHub authentication failed: invalid or expired token.', 401, response.statusText);
   }
 
   if (response.status === 404 && username) {
@@ -71,21 +87,36 @@ function handleGitHubErrors(response: Response, username?: string): void {
   }
 
   if (response.status === 403 || response.status === 429) {
-    if (remaining === 0 || response.status === 429) {
-      const resetMsg = resetDate ? ` Rate limit resets at ${resetDate.toLocaleTimeString()}.` : '';
+    const isRateLimited = response.status === 429 || remaining === 0 || retryAfterHeader !== null;
+    if (isRateLimited) {
+      const resetMsg = effectiveResetDate ? ` Rate limit resets at ${effectiveResetDate.toLocaleTimeString()}.` : '';
       throw new GitHubApiError(
         `GitHub API rate limit exceeded.${resetMsg}`,
         response.status,
         response.statusText,
-        resetDate,
+        effectiveResetDate,
         remaining,
         true
       );
     }
+
+    // Non-rate-limit 403 (insufficient permissions)
+    let bodyMessage: string | null = null;
+    try {
+      const cloned = response.clone();
+      const body = await cloned.json();
+      if (body && typeof body === 'object' && 'message' in body && typeof body.message === 'string') {
+        bodyMessage = body.message;
+      }
+    } catch {
+      // Ignore body parsing failure
+    }
+
+    const permMsg = 'This token cannot read your stars. Edit the token and set Account permissions → Starring → Read-only.';
     throw new GitHubApiError(
-      `GitHub API access forbidden: ${response.statusText}`,
+      permMsg,
       response.status,
-      response.statusText,
+      response.statusText || bodyMessage || 'Forbidden',
       resetDate,
       remaining,
       false
@@ -112,7 +143,7 @@ export async function getAuthenticatedUser(
     throw new Error(`Network failure while requesting GitHub API /user: ${error instanceof Error ? error.message : String(error)}`);
   }
 
-  handleGitHubErrors(response);
+  await handleGitHubErrors(response);
 
   let data: unknown;
   try {
@@ -183,7 +214,7 @@ export async function fetchStarredRepos(options: FetchStarredReposOptions = {}):
       throw new Error(`Network failure while requesting GitHub API on page ${page}: ${networkError instanceof Error ? networkError.message : String(networkError)}`);
     }
 
-    handleGitHubErrors(response, username);
+    await handleGitHubErrors(response, username);
 
     let items: unknown;
     try {
