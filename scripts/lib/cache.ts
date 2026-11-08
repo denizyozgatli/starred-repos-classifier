@@ -1,7 +1,7 @@
-import { createHash } from 'node:crypto';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import type { ClassificationMeta, RepositoryCategory } from '../../src/types/repo.ts';
+import { computeInputHash } from '../../src/core/hash.ts';
 
 export interface CacheEntry {
   category: RepositoryCategory;
@@ -10,29 +10,10 @@ export interface CacheEntry {
 
 export type ClassificationCache = Record<string, CacheEntry>;
 
+export { computeInputHash };
+
 const CACHE_PATH = resolve(process.cwd(), 'data', '.cache.json');
 const DEFAULT_REPOS_PATH = resolve(process.cwd(), 'data', 'repos.json');
-
-/**
- * Computes a deterministic SHA-256 hash based on repository name, description, topics, and language.
- */
-export function computeInputHash(repo: {
-  fullName: string;
-  description: string | null;
-  topics: string[];
-  language: string | null;
-}): string {
-  const topicsArray = Array.isArray(repo.topics) ? repo.topics : [];
-  const normalizedTopics = [...topicsArray].map(t => String(t).toLowerCase().trim()).sort().join(',');
-  const payload = [
-    repo.fullName.toLowerCase().trim(),
-    (repo.description || '').trim(),
-    normalizedTopics,
-    (repo.language || '').toLowerCase().trim(),
-  ].join('||');
-
-  return createHash('sha256').update(payload).digest('hex').slice(0, 16);
-}
 
 /**
  * Loads classification cache.

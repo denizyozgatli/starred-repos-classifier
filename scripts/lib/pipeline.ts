@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { fetchAllStarredRepos, resolveActiveUsername } from './github.ts';
+import { fetchAllStarredRepos, getAuthenticatedUser } from './github.ts';
 import { fetchUserStarLists, mergeStarLists } from './star-lists.ts';
 import { computeInputHash, loadCache, saveCache, type ClassificationCache } from './cache.ts';
 import { classifyRepo, classifyWithRules } from './classifier.ts';
@@ -59,23 +59,40 @@ export async function executeDatasetPipeline(options: PipelineOptions): Promise<
   const useOverrides = Boolean(options.useOverrides);
   const seedReposPath = options.seedReposPath === null ? null : (options.seedReposPath ? resolve(options.seedReposPath) : null);
 
+  let ownerLogin: string | undefined;
+  if (token) {
+    try {
+      const authUser = await getAuthenticatedUser(token);
+      ownerLogin = authUser.login;
+    } catch {
+      // Non-fatal if /user fails
+    }
+  }
+
+  const isViewer = Boolean(token && (!username || (ownerLogin && username.toLowerCase() === ownerLogin.toLowerCase())));
+  const activeUser = username || ownerLogin;
+  if (activeUser) {
+    logger.log(`[pipeline] Resolved active dataset username: @${activeUser}`);
+  }
+
   // Step 1: Fetch starred repositories from GitHub REST API
-  logger.log(`[pipeline] Fetching starred repositories${username ? ` for user "${username}"` : ' (authenticated user)'}...`);
+  logger.log(`[pipeline] Fetching starred repositories${isViewer ? ' (authenticated user)' : ` for user "${username}"`}...`);
   const fetchedRepos = await fetchAllStarredRepos({
     username,
     token,
+    tokenOwnerLogin: ownerLogin,
     onPageFetched: options.onPageFetched || ((page, count) => {
       logger.log(`  Fetched page ${page} (${count} repositories)`);
     }),
   });
 
-  const activeUser = await resolveActiveUsername({ username, token });
-  if (activeUser) {
-    logger.log(`[pipeline] Resolved active dataset username: @${activeUser}`);
-  }
-
   // Step 2: Retrieve Star Lists via GitHub GraphQL API where supported
-  const starListsMap = await fetchUserStarLists({ token, username: activeUser || username });
+  const starListsMap = await fetchUserStarLists({
+    token,
+    username: isViewer ? undefined : (username || activeUser),
+    isViewer,
+    logger,
+  });
   const rawRepos = mergeStarLists(fetchedRepos, starListsMap);
 
   logger.log(`[pipeline] Successfully fetched ${rawRepos.length} total repositories.`);
