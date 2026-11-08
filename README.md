@@ -48,7 +48,7 @@ To read your starred repositories directly from the browser, create a fine-grain
 
 1. Go to [github.com/settings/personal-access-tokens/new](https://github.com/settings/personal-access-tokens/new).
 2. Set a name (e.g. `starred-repos-classifier`) and expiration.
-3. Under **Repository access**, select **Public repositories (read-only)**.
+3. Under **Repository access**, choose **Public repositories (read-only)** if you only starred public repos; choose **All repositories** if you starred any private repositories (**Starring** stays **Read-only** either way).
 4. Under **Account permissions**, locate **Starring** and select **Read-only**.
 5. Click **Generate token** and copy the value.
 
@@ -56,6 +56,12 @@ To read your starred repositories directly from the browser, create a fine-grain
 > - The token is stored **only in your browser** (`sessionStorage` by default, or `localStorage` if you check "Remember on this device").
 > - The token is sent **strictly to `api.github.com`** via direct HTTPS requests — never to any intermediate server or proxy.
 > - Classic personal access tokens (`ghp_`) are also supported; include the `repo` scope if you want to fetch private GitHub Star Lists.
+
+#### Troubleshooting
+
+- **"I see fewer repositories than my GitHub profile shows."** — The token cannot see private repositories. Create the token with Repository access "All repositories" (Account permissions → Starring → Read-only), reconnect in the app, and refresh.
+- **"The token page always shows 'Public repositories (read-only)'."** — That line is permanent: every fine-grained token can always read public repositories. It does not mean your "All repositories" selection was reset — open the token, click Edit, and check the Repository access radio to verify.
+- **"Some private repositories are still missing."** — Repositories owned by an organization appear only if that organization allows fine-grained personal access tokens (org policy). A classic token (`ghp_`) with the `repo` scope is an alternative.
 
 ### Optional: Gemini AI Classification
 
