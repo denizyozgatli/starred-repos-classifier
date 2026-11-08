@@ -9,6 +9,8 @@ import { stateToQueryString, readStateFromUrl, type DashboardState } from '../sr
 import { parseAndValidateDataset, validateDataset } from '../src/lib/datasetValidation.ts';
 import { validateRepos } from '../scripts/lib/validator.ts';
 import { SettingsModal } from '../src/components/SettingsModal.tsx';
+import { SyncLog } from '../src/components/SyncLog.tsx';
+import { ConnectGitHub } from '../src/components/ConnectGitHub.tsx';
 
 const SAMPLE_REPOS: Repository[] = [
   {
@@ -989,6 +991,59 @@ describe('Frontend Logic', () => {
       expect(html).toContain('Back to list');
       expect(html).toContain('id="llm-model-input"');
       expect(html).not.toContain('id="llm-model-picker"');
+    });
+  });
+
+  describe('Sync Activity Log & Visible Throttling UI', () => {
+    it('renders Activity toggle with count, expanded lines with kinds, and Clear button', () => {
+      const sampleEntries = [
+        { ts: 1772985600000, text: 'Fetching stars — page 1', kind: 'info' as const },
+        { ts: 1772985602000, text: 'Google Gemini · rate limit, waiting 15s', kind: 'warn' as const },
+        { ts: 1772985604000, text: 'Sync failed: Network error', kind: 'error' as const },
+        { ts: 1772985606000, text: 'Sync finished: 10 repos, 8 rule-based, 2 AI, 0 Other, 0 errors', kind: 'success' as const },
+      ];
+
+      const html = renderToString(
+        React.createElement(SyncLog, {
+          entries: sampleEntries,
+          defaultOpen: true,
+          onClear: () => {},
+        })
+      );
+
+      expect(html).toContain('Activity');
+      expect(html).toContain('(4)');
+      expect(html).toContain('Clear');
+      expect(html).toContain('Fetching stars — page 1');
+      expect(html).toContain('Google Gemini · rate limit, waiting 15s');
+      expect(html).toContain('Sync failed: Network error');
+      expect(html).toContain('Sync finished: 10 repos, 8 rule-based, 2 AI, 0 Other, 0 errors');
+      expect(html).toContain('text-[#e3b341]'); // yellow warn
+      expect(html).toContain('text-[#ff7b72]'); // red error
+      expect(html).toContain('text-[#3fb950]'); // green success
+    });
+
+    it('ConnectGitHub renders countdown and shimmer strip during LLM waiting phase', () => {
+      const html = renderToString(
+        React.createElement(ConnectGitHub, {
+          isSyncing: true,
+          phase: 'llm',
+          progress: {
+            phase: 'llm',
+            done: 3,
+            total: 12,
+            waitingMs: 4000,
+          },
+          onConnect: async () => true,
+          onOpenImport: () => {},
+        })
+      );
+
+      expect(html).toContain('Classifying with AI');
+      expect(html).toContain('3');
+      expect(html).toContain('12');
+      expect(html).toContain('next in 4s');
+      expect(html).toContain('animate-shimmer');
     });
   });
 });

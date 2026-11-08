@@ -14,6 +14,7 @@ import { SortSelector } from './components/SortSelector.tsx';
 import { RepoGrid } from './components/RepoGrid.tsx';
 import { EmptyState } from './components/EmptyState.tsx';
 import { ConnectGitHub } from './components/ConnectGitHub.tsx';
+import { SyncLog } from './components/SyncLog.tsx';
 import { SettingsModal } from './components/SettingsModal.tsx';
 import { useGitHubSync } from './hooks/useGitHubSync.ts';
 import { loadLlmSettings } from './lib/storage/settings.ts';
@@ -287,25 +288,32 @@ export default function App() {
 
         {/* Background Refresh Notice */}
         {sync.isBackgroundRefreshing && sync.dataset && (
-          <div className="bg-[#161b22] border border-[#30363d] rounded-xl px-4 py-2.5 flex items-center justify-between text-xs text-github-muted animate-in fade-in">
-            <div className="flex items-center gap-2">
-              <RefreshCw className="w-3.5 h-3.5 animate-spin text-[#58a6ff]" aria-hidden="true" />
-              <span>
-                Refreshing starred repositories in background…{' '}
-                {sync.phase === 'llm'
-                  ? `Classifying with LLM ${sync.progress.done} / ${sync.progress.total || '…'}`
-                  : sync.phase === 'classifying'
-                  ? `Classifying ${sync.progress.done} / ${sync.progress.total || '…'}`
-                  : `Fetching page ${sync.progress.page ?? 1}`}
-              </span>
+          <div className="space-y-2">
+            <div className="bg-[#161b22] border border-[#30363d] rounded-xl px-4 py-2.5 flex items-center justify-between text-xs text-github-muted animate-in fade-in">
+              <div className="flex items-center gap-2">
+                <RefreshCw className="w-3.5 h-3.5 animate-spin text-[#58a6ff]" aria-hidden="true" />
+                <span>
+                  Refreshing starred repositories in background…{' '}
+                  {sync.phase === 'llm' || sync.phase === 'waiting'
+                    ? `Classifying with AI ${sync.progress.done} / ${sync.progress.total || '…'}${
+                        sync.progress.waitingMs ? ` · next in ${Math.ceil(sync.progress.waitingMs / 1000)}s` : ''
+                      }`
+                    : sync.phase === 'classifying'
+                    ? `Classifying ${sync.progress.done} / ${sync.progress.total || '…'}`
+                    : `Fetching page ${sync.progress.page ?? 1}`}
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={sync.cancel}
+                className="text-xs text-github-muted hover:text-white underline decoration-github-muted underline-offset-2 transition-colors cursor-pointer"
+              >
+                Cancel
+              </button>
             </div>
-            <button
-              type="button"
-              onClick={sync.cancel}
-              className="text-xs text-github-muted hover:text-white underline decoration-github-muted underline-offset-2 transition-colors cursor-pointer"
-            >
-              Cancel
-            </button>
+            {sync.activityLog.length > 0 && (
+              <SyncLog entries={sync.activityLog} onClear={sync.clearActivityLog} />
+            )}
           </div>
         )}
 
@@ -334,6 +342,8 @@ export default function App() {
             progress={sync.progress}
             error={sync.error?.message}
             onClearError={sync.clearError}
+            activityLog={sync.activityLog}
+            onClearActivityLog={sync.clearActivityLog}
             onConnect={async (token, remember) => {
               const ok = await sync.connect(token, remember);
               if (ok) {

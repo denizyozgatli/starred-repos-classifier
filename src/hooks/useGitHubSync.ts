@@ -4,6 +4,7 @@ import {
   syncStarredRepos,
   shouldAutoRefresh,
   type SyncProgress,
+  type SyncPhase,
   type SyncError,
   type LLMSyncStatus,
   type GeminiSyncStatus,
@@ -15,12 +16,13 @@ import { loadToken, saveToken, clearToken, loadLlmSettings, saveLlmSettings, isM
 import { createDefaultStore, type KeyValueStore } from '../lib/storage/datasetStore.ts';
 import { getLLMProvider, type LLMProviderId } from '../core/llm-providers.ts';
 import { PROVIDER_DEFAULTS } from '../core/llm.ts';
+import { createActivityLog, type ActivityLog, type ActivityLogEntry, type ActivityLogKind } from '../lib/activityLog.ts';
 
 export type SyncStatus = 'idle' | 'syncing' | 'ready' | 'error';
 
 export interface GitHubSyncState {
   status: SyncStatus;
-  phase: 'fetching' | 'classifying' | 'llm' | null;
+  phase: SyncPhase | null;
   progress: SyncProgress;
   error: SyncError | null;
   lastSyncAt: string | null;
@@ -53,12 +55,14 @@ export interface UseGitHubSyncReturn extends GitHubSyncState {
   clearGeminiNotice: () => void;
   clearModelFallbackNotice: () => void;
   fetchLlmModels: (providerId: LLMProviderId, apiKey: string) => Promise<string[]>;
+  activityLog: ReadonlyArray<ActivityLogEntry>;
+  clearActivityLog: () => void;
 }
 
 export function useGitHubSync(options: UseGitHubSyncOptions = {}): UseGitHubSyncReturn {
   const [store] = useState<KeyValueStore>(() => options.store ?? createDefaultStore());
   const [status, setStatus] = useState<SyncStatus>('idle');
-  const [phase, setPhase] = useState<'fetching' | 'classifying' | 'llm' | null>(null);
+  const [phase, setPhase] = useState<SyncPhase | null>(null);
   const [progress, setProgress] = useState<SyncProgress>({ phase: 'fetching', done: 0 });
   const [error, setError] = useState<SyncError | null>(null);
   const [lastSyncAt, setLastSyncAt] = useState<string | null>(null);
@@ -72,6 +76,18 @@ export function useGitHubSync(options: UseGitHubSyncOptions = {}): UseGitHubSync
   const [dataset, setDataset] = useState<DatasetEnvelope | null>(null);
 
   const abortControllerRef = useRef<AbortController | null>(null);
+  const activityLogRef = useRef<ActivityLog>(createActivityLog(50));
+  const [activityLogSnapshot, setActivityLogSnapshot] = useState<ReadonlyArray<ActivityLogEntry>>([]);
+
+  const addLogEntry = useCallback((entry: { text: string; kind?: ActivityLogKind }) => {
+    activityLogRef.current.add(entry);
+    setActivityLogSnapshot(activityLogRef.current.entries());
+  }, []);
+
+  const clearActivityLog = useCallback(() => {
+    activityLogRef.current.clear();
+    setActivityLogSnapshot([]);
+  }, []);
 
   const runSync = useCallback(
     async (
@@ -125,10 +141,14 @@ export function useGitHubSync(options: UseGitHubSyncOptions = {}): UseGitHubSync
                 };
                 saveLlmSettings(currentSettings);
                 setModelFallbackNotice(`Default model was retired; switched to ${pickedModel}.`);
+                addLogEntry({ text: `Default model retired; switched to ${pickedModel}`, kind: 'warn' });
               },
             };
           }
         }
+
+        const activeProviderId = effectiveLlm?.provider || loadLlmSettings().provider || 'google';
+        const providerLabel = getLLMProvider(activeProviderId).label;
 
         const result = await syncStarredRepos({
           token,
@@ -139,7 +159,38 @@ export function useGitHubSync(options: UseGitHubSyncOptions = {}): UseGitHubSync
           onProgress: p => {
             setPhase(p.phase);
             setProgress(p);
+
+            if (p.phase === 'fetching') {
+              addLogEntry({ text: `Fetching stars — page ${p.page ?? 1}`, kind: 'info' });
+            } else if (p.phase === 'classifying') {
+              const repoName = p.repoName ?? p.currentRepo ?? '';
+              addLogEntry({ text: `Classifying ${p.done} / ${p.total || '?'} — ${repoName}`, kind: 'info' });
+            } else if (p.phase === 'llm') {
+              const repoName = p.repoName ?? p.currentRepo ?? '';
+              addLogEntry({ text: `${providerLabel} · ${p.done} / ${p.total || '?'} — ${repoName}`, kind: 'info' });
+            } else if (p.phase === 'waiting') {
+              const sec = Math.ceil((p.waitingMs ?? 0) / 1000);
+              if (p.isThrottled) {
+                addLogEntry({ text: `${providerLabel} · rate limit, waiting ${sec}s`, kind: 'warn' });
+              } else {
+                addLogEntry({ text: `${providerLabel} · next in ${sec}s`, kind: 'info' });
+              }
+            }
           },
+        });
+
+        if (result.llmErrors && result.llmErrors > 0) {
+          addLogEntry({ text: `${providerLabel} · ${result.llmErrors} repos fell back to rules`, kind: 'warn' });
+        }
+        const repos = result.envelope.repos || [];
+        const total = repos.length;
+        const nRule = repos.filter(r => r.classification?.method === 'rule').length;
+        const nAI = repos.filter(r => r.classification?.method === 'llm').length;
+        const nOther = repos.filter(r => r.category === 'Other').length;
+        const nErrors = result.llmErrors ?? 0;
+        addLogEntry({
+          text: `Sync finished: ${total} repos, ${nRule} rule-based, ${nAI} AI, ${nOther} Other, ${nErrors} errors`,
+          kind: 'success',
         });
 
         setDataset(result.envelope);
@@ -154,6 +205,13 @@ export function useGitHubSync(options: UseGitHubSyncOptions = {}): UseGitHubSync
         return true;
       } catch (err) {
         const syncErr = mapToSyncError(err);
+
+        if (syncErr.code !== 'aborted') {
+          addLogEntry({
+            text: `Sync failed: ${syncErr.message}`,
+            kind: 'error',
+          });
+        }
 
         if (syncErr.code === 'aborted') {
           // If aborted, keep previous ready state if dataset exists
@@ -370,5 +428,7 @@ export function useGitHubSync(options: UseGitHubSyncOptions = {}): UseGitHubSync
     clearGeminiNotice,
     clearModelFallbackNotice,
     fetchLlmModels,
+    activityLog: activityLogSnapshot,
+    clearActivityLog,
   };
 }

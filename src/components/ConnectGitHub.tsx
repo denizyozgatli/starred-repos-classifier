@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   KeyRound,
   Eye,
@@ -10,18 +10,22 @@ import {
   Loader2,
   X,
 } from 'lucide-react';
-import type { SyncProgress } from '../lib/sync.ts';
+import type { SyncProgress, SyncPhase } from '../lib/sync.ts';
+import type { ActivityLogEntry } from '../lib/activityLog.ts';
+import { SyncLog } from './SyncLog.tsx';
 
 interface ConnectGitHubProps {
   onConnect: (token: string, remember: boolean) => Promise<boolean>;
   onCancel?: () => void;
   onOpenImport: () => void;
   isSyncing?: boolean;
-  phase?: 'fetching' | 'classifying' | 'llm' | null;
+  phase?: SyncPhase | null;
   progress?: SyncProgress;
   error?: string | null;
   onClearError?: () => void;
   hasLoadedDataset?: boolean;
+  activityLog?: ReadonlyArray<ActivityLogEntry>;
+  onClearActivityLog?: () => void;
 }
 
 export const ConnectGitHub: React.FC<ConnectGitHubProps> = ({
@@ -34,11 +38,34 @@ export const ConnectGitHub: React.FC<ConnectGitHubProps> = ({
   error,
   onClearError,
   hasLoadedDataset = false,
+  activityLog,
+  onClearActivityLog,
 }) => {
   const [token, setToken] = useState('');
   const [showToken, setShowToken] = useState(false);
   const [remember, setRemember] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const initialWaitSec = progress?.waitingMs && progress.waitingMs > 0 ? Math.ceil(progress.waitingMs / 1000) : 0;
+  const [remainingSeconds, setRemainingSeconds] = useState<number>(initialWaitSec);
+
+  useEffect(() => {
+    if (progress?.waitingMs && progress.waitingMs > 0) {
+      const totalSec = Math.ceil(progress.waitingMs / 1000);
+      setRemainingSeconds(totalSec);
+      const intervalId = window.setInterval(() => {
+        setRemainingSeconds(prev => {
+          if (prev <= 1) {
+            window.clearInterval(intervalId);
+            return 0;
+          }
+          return prev - 1;
+        });
+      }, 1000);
+      return () => window.clearInterval(intervalId);
+    } else {
+      setRemainingSeconds(0);
+    }
+  }, [progress?.waitingMs]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -55,7 +82,7 @@ export const ConnectGitHub: React.FC<ConnectGitHubProps> = ({
 
   // 1. Syncing State
   if (isSyncing) {
-    const isLlm = phase === 'llm';
+    const isLlm = phase === 'llm' || phase === 'waiting';
     const isClassifying = phase === 'classifying' || isLlm;
     const total = progress?.total ?? 0;
     const done = progress?.done ?? 0;
@@ -74,8 +101,11 @@ export const ConnectGitHub: React.FC<ConnectGitHubProps> = ({
           <p className="text-xs text-github-muted" aria-live="polite">
             {isLlm ? (
               <span>
-                Classifying with AI: <strong className="text-white font-mono">{done}</strong> /{' '}
+                Classifying with AI <strong className="text-white font-mono">{done}</strong> /{' '}
                 <span className="font-mono">{total || '…'}</span>
+                {remainingSeconds > 0 && (
+                  <span className="text-github-muted">{` · next in ${remainingSeconds}s`}</span>
+                )}
               </span>
             ) : isClassifying ? (
               <span>
@@ -93,7 +123,7 @@ export const ConnectGitHub: React.FC<ConnectGitHubProps> = ({
 
         {/* Progress Bar */}
         <div className="space-y-2">
-          <div className="w-full bg-[#21262d] rounded-full h-2.5 overflow-hidden border border-[#30363d]/60">
+          <div className="relative w-full bg-[#21262d] rounded-full h-2.5 overflow-hidden border border-[#30363d]/60">
             {isClassifying && total > 0 ? (
               <div
                 className="bg-[#238636] h-full transition-all duration-200 rounded-full"
@@ -106,12 +136,24 @@ export const ConnectGitHub: React.FC<ConnectGitHubProps> = ({
             ) : (
               <div className="bg-[#58a6ff] h-full w-2/5 animate-pulse rounded-full" />
             )}
+            {remainingSeconds > 0 && (
+              <div
+                className="absolute inset-0 bg-gradient-to-r from-transparent via-white/20 to-transparent animate-shimmer pointer-events-none"
+                style={{ backgroundSize: '200% 100%' }}
+                aria-hidden="true"
+              />
+            )}
           </div>
-          {isClassifying && progress?.repoName && (
+          {isClassifying && (progress?.repoName || progress?.currentRepo) && (
             <p className="text-[11px] text-github-muted truncate font-mono max-w-sm mx-auto">
-              {progress.repoName}
+              {progress.repoName ?? progress.currentRepo}
             </p>
           )}
+        </div>
+
+        {/* Collapsible Activity Disclosure */}
+        <div className="pt-1">
+          <SyncLog entries={activityLog ?? []} onClear={onClearActivityLog} />
         </div>
 
         {onCancel && (

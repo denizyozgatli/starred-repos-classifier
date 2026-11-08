@@ -5,7 +5,9 @@ import {
   SyncError,
   DEFAULT_MAX_CACHE_AGE_MS,
   resolveSyncFailure,
+  type SyncProgress,
 } from '../src/lib/sync.ts';
+import { createActivityLog } from '../src/lib/activityLog.ts';
 import { MemoryStore } from '../src/lib/storage/datasetStore.ts';
 import { saveToken, loadToken, clearToken, isTokenRemembered } from '../src/lib/storage/settings.ts';
 import type { DatasetEnvelope } from '../src/types/repo.ts';
@@ -537,6 +539,110 @@ describe('Sync Engine & Storage', () => {
       const res2 = resolveSyncFailure(networkErr, false);
       expect(res2.shouldClearToken).toBe(false);
       expect(res2.showConnectScreen).toBe(true);
+    });
+  });
+
+  describe('ActivityLog Helper (src/lib/activityLog.ts)', () => {
+    it('creates bounded ring buffer enforcing capacity and silent overflow', () => {
+      const log = createActivityLog(3);
+      expect(log.size()).toBe(0);
+      expect(log.entries()).toEqual([]);
+
+      log.add({ text: 'First' });
+      log.add({ text: 'Second' });
+      log.add({ text: 'Third' });
+      expect(log.size()).toBe(3);
+      expect(log.entries().map(e => e.text)).toEqual(['First', 'Second', 'Third']);
+
+      // 4th entry silently evicts oldest ('First')
+      log.add({ text: 'Fourth' });
+      expect(log.size()).toBe(3);
+      expect(log.entries().map(e => e.text)).toEqual(['Second', 'Third', 'Fourth']);
+    });
+
+    it('records entry kinds and defaults to info', () => {
+      const log = createActivityLog(10);
+      log.add({ text: 'Default kind entry' });
+      log.add({ text: 'Warning entry', kind: 'warn' });
+      log.add({ text: 'Error entry', kind: 'error' });
+      log.add({ text: 'Success entry', kind: 'success' });
+
+      const entries = log.entries();
+      expect(entries).toHaveLength(4);
+      expect(entries[0].kind).toBe('info');
+      expect(entries[1].kind).toBe('warn');
+      expect(entries[2].kind).toBe('error');
+      expect(entries[3].kind).toBe('success');
+      expect(typeof entries[0].ts).toBe('number');
+    });
+
+    it('clears all entries and resets size to 0', () => {
+      const log = createActivityLog(10);
+      log.add({ text: 'To be cleared' });
+      expect(log.size()).toBe(1);
+      log.clear();
+      expect(log.size()).toBe(0);
+      expect(log.entries()).toEqual([]);
+    });
+  });
+
+  describe('Sync Waiting Progress Events', () => {
+    it('emits a waiting event before each LLM call with waitingMs', async () => {
+      const ambiguousRepo = {
+        id: 777,
+        name: 'ambiguous-repo',
+        full_name: 'octocat/ambiguous-repo',
+        owner: { login: 'octocat' },
+        description: 'No matching keywords or rules',
+        topics: [],
+        language: 'C++',
+        stargazers_count: 50,
+        html_url: 'https://github.com/octocat/ambiguous-repo',
+        updated_at: '2026-01-01T00:00:00Z',
+      };
+
+      globalThis.fetch = async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.endsWith('/user')) {
+          return new Response(JSON.stringify({ login: 'octocat' }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+        }
+        if (url.includes('/user/starred')) {
+          return new Response(JSON.stringify([ambiguousRepo]), { status: 200, headers: { 'Content-Type': 'application/json' } });
+        }
+        if (url.endsWith('/graphql')) {
+          return new Response(JSON.stringify({ data: { viewer: { lists: { nodes: [] } } } }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+        }
+        if (url.includes('/chat/completions')) {
+          return new Response(
+            JSON.stringify({
+              choices: [{ message: { content: JSON.stringify({ category: 'Backend / API', confidence: 0.9 }) } }],
+            }),
+            { status: 200, headers: { 'Content-Type': 'application/json' } }
+          );
+        }
+        return new Response('Not Found', { status: 404 });
+      };
+
+      const progressEvents: SyncProgress[] = [];
+      const store = new MemoryStore();
+
+      await syncStarredRepos({
+        token: 'ghp_test_token',
+        store,
+        llm: {
+          provider: 'openai',
+          apiKey: 'sk-test',
+          minIntervalMs: 2500,
+        },
+        onProgress: p => {
+          progressEvents.push(p);
+        },
+      });
+
+      const waitingEvents = progressEvents.filter(p => p.phase === 'waiting');
+      expect(waitingEvents.length).toBeGreaterThan(0);
+      expect(waitingEvents[0].waitingMs).toBe(2500);
+      expect(waitingEvents[0].repoName).toBe('ambiguous-repo');
     });
   });
 });

@@ -8,6 +8,7 @@ import {
   LLMRateLimitError,
   LLMAuthError,
 } from '../core/llm.ts';
+import { RateLimiter } from '../core/rate-limiter.ts';
 import { computeInputHash } from '../core/hash.ts';
 import { buildDatasetEnvelope } from '../core/dataset.ts';
 import type { DatasetEnvelope } from '../types/repo.ts';
@@ -107,12 +108,18 @@ export function mapToSyncError(err: unknown): SyncError {
 export type LLMSyncStatus = 'disabled' | 'ok' | 'partial' | 'quota_exceeded' | 'invalid_key';
 export type GeminiSyncStatus = LLMSyncStatus;
 
+export type SyncPhase = 'fetching' | 'classifying' | 'llm' | 'waiting';
+
 export interface SyncProgress {
-  phase: 'fetching' | 'classifying' | 'llm';
+  phase: SyncPhase;
   done: number;
   total?: number;
   page?: number;
   repoName?: string;
+  currentRepo?: string;
+  llmErrors?: number;
+  waitingMs?: number;
+  isThrottled?: boolean;
 }
 
 export interface SyncStats {
@@ -309,15 +316,31 @@ export async function syncStarredRepos(options: SyncStarredReposOptions): Promis
         effectiveLlm.minIntervalMs ??
         (effectiveLlm.minIntervalSec ? effectiveLlm.minIntervalSec * 1000 : undefined);
 
+      const rateLimiter = new RateLimiter({ minIntervalMs });
+      let currentRepoName: string | undefined = undefined;
+
       const classifier = createLLMClassifier({
         provider,
         apiKey: effectiveLlm.apiKey.trim(),
         model: effectiveLlm.model,
         minIntervalMs,
         adaptive: effectiveLlm.adaptive,
+        rateLimiter,
         signal,
         allowModelHeal: effectiveLlm.allowModelHeal,
         onModelFallback: effectiveLlm.onModelFallback,
+        onThrottle: (throttleWaitMs: number) => {
+          onProgress?.({
+            phase: 'waiting',
+            done: llmAttemptCount,
+            total: totalLlm,
+            repoName: currentRepoName,
+            currentRepo: currentRepoName,
+            llmErrors: llmErrorCount,
+            waitingMs: throttleWaitMs,
+            isThrottled: true,
+          });
+        },
       });
 
       // Calculate total LLM attempts needed for progress reporting
@@ -343,16 +366,44 @@ export async function syncStarredRepos(options: SyncStarredReposOptions): Promis
           };
         }
 
+        currentRepoName = repo.name;
+        const waitMs = Math.round(rateLimiter.getMinIntervalMs() || 4000);
+
+        // Emit one extra onProgress right BEFORE the rate limiter wait with waitingMs set
+        onProgress?.({
+          phase: 'waiting',
+          done: llmAttemptCount,
+          total: totalLlm,
+          repoName: repo.name,
+          currentRepo: repo.name,
+          llmErrors: llmErrorCount,
+          waitingMs: waitMs,
+          isThrottled: false,
+        });
+
         llmAttemptCount++;
         onProgress?.({
           phase: 'llm',
           done: llmAttemptCount,
           total: totalLlm,
           repoName: repo.name,
+          currentRepo: repo.name,
+          llmErrors: llmErrorCount,
+          waitingMs: waitMs,
         });
 
         try {
-          return await classifier(repo);
+          const result = await classifier(repo);
+          onProgress?.({
+            phase: 'llm',
+            done: llmAttemptCount,
+            total: totalLlm,
+            repoName: repo.name,
+            currentRepo: repo.name,
+            llmErrors: llmErrorCount,
+            waitingMs: undefined,
+          });
+          return result;
         } catch (err) {
           if (signal?.aborted) {
             throw err;
@@ -400,6 +451,7 @@ export async function syncStarredRepos(options: SyncStarredReposOptions): Promis
             done,
             total,
             repoName: repo.name,
+            currentRepo: repo.name,
           });
         },
       }
