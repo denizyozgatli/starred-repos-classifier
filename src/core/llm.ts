@@ -4,18 +4,54 @@ import type { ClassificationResult } from './classifier.ts';
 import {
   RateLimiter,
   executeWithRetry,
-  isRateLimitError,
-  isQuotaExceededError,
 } from './rate-limiter.ts';
+import {
+  type LLMProviderId,
+  type LLMProviderDef,
+  LLM_PROVIDERS,
+  getLLMProvider,
+  LLMProviderError,
+  LLMRateLimitError,
+  LLMAuthError,
+  LLMError,
+} from './llm-providers.ts';
 
-export const GEMINI_MODEL = 'gemini-3.8-flash';
+export {
+  type LLMProviderId,
+  type LLMProviderDef,
+  LLM_PROVIDERS,
+  getLLMProvider,
+  LLMProviderError,
+  LLMRateLimitError,
+  LLMAuthError,
+  LLMError,
+};
 
-export class GeminiQuotaError extends Error {
-  constructor(message: string = 'Gemini API quota exceeded (RESOURCE_EXHAUSTED / 429).') {
-    super(message);
-    this.name = 'GeminiQuotaError';
-  }
-}
+export const DEFAULT_LLM_PROVIDER: LLMProviderId = 'google';
+
+export const PROVIDER_DEFAULTS: Record<
+  LLMProviderId,
+  { defaultModel: string; defaultIntervalSec: number }
+> = {
+  openai: {
+    defaultModel: 'gpt-4o-mini',
+    defaultIntervalSec: 1,
+  },
+  anthropic: {
+    defaultModel: 'claude-3-5-sonnet-20241022',
+    defaultIntervalSec: 1,
+  },
+  google: {
+    defaultModel: 'gemini-3.8-flash',
+    defaultIntervalSec: 4,
+  },
+  deepseek: {
+    defaultModel: 'deepseek-chat',
+    defaultIntervalSec: 1,
+  },
+};
+
+export { LLMRateLimitError as GeminiQuotaError };
 
 export function buildClassificationPrompt(repo: NormalizedRepo): string {
   return `You are an expert software classifier. Categorize this GitHub repository into EXACTLY ONE of the following allowed categories:
@@ -86,7 +122,8 @@ export function parseClassificationResponse(
   };
 }
 
-export interface GeminiClassifierOptions {
+export interface LLMClassifierOptions {
+  provider?: LLMProviderId;
   apiKey: string;
   model?: string;
   minIntervalMs?: number;
@@ -96,13 +133,16 @@ export interface GeminiClassifierOptions {
   rateLimiter?: RateLimiter;
 }
 
-export function createGeminiClassifier(
-  options: GeminiClassifierOptions
+export function createLLMClassifier(
+  options: LLMClassifierOptions
 ): (repo: NormalizedRepo) => Promise<ClassificationResult> {
+  const providerId: LLMProviderId = options.provider ?? DEFAULT_LLM_PROVIDER;
+  const providerDef = getLLMProvider(providerId);
+
   const {
     apiKey,
-    model = GEMINI_MODEL,
-    minIntervalMs = 4000,
+    model = providerDef.defaultModel,
+    minIntervalMs = providerDef.defaultIntervalSec * 1000,
     signal,
     sleepFn,
     maxRetries = 2,
@@ -117,8 +157,6 @@ export function createGeminiClassifier(
       throw signal.reason || err;
     }
 
-    const { GoogleGenAI } = await import('@google/genai');
-    const ai = new GoogleGenAI({ apiKey });
     const prompt = buildClassificationPrompt(repo);
 
     try {
@@ -130,15 +168,12 @@ export function createGeminiClassifier(
             throw signal.reason || err;
           }
 
-          const response = await ai.models.generateContent({
+          return await providerDef.classify({
+            apiKey,
             model,
-            contents: prompt,
-            config: {
-              responseMimeType: 'application/json',
-            },
+            prompt,
+            signal,
           });
-
-          return response.text || '';
         },
         {
           rateLimiter,
@@ -169,16 +204,21 @@ export function createGeminiClassifier(
         throw signal.reason || abortErr;
       }
 
-      if (err instanceof GeminiQuotaError) {
-        throw err;
-      }
-
-      if (isQuotaExceededError(err) || isRateLimitError(err)) {
-        const msg = err instanceof Error ? err.message : (err && typeof err === 'object' && 'message' in err) ? String((err as Record<string, unknown>).message) : String(err);
-        throw new GeminiQuotaError(msg);
-      }
-
+      // Propagate typed errors (Auth, RateLimit, Error)
       throw err;
     }
   };
+}
+
+export interface GeminiClassifierOptions extends Omit<LLMClassifierOptions, 'provider'> {
+  provider?: LLMProviderId;
+}
+
+export function createGeminiClassifier(
+  options: GeminiClassifierOptions
+): (repo: NormalizedRepo) => Promise<ClassificationResult> {
+  return createLLMClassifier({
+    ...options,
+    provider: options.provider ?? 'google',
+  });
 }

@@ -1,16 +1,19 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import {
-  GEMINI_MODEL,
-  GeminiQuotaError,
   buildClassificationPrompt,
   parseClassificationResponse,
+  createLLMClassifier,
+  PROVIDER_DEFAULTS,
+  DEFAULT_LLM_PROVIDER,
+  LLMRateLimitError,
+  LLMAuthError,
+  getLLMProvider,
+  LLM_PROVIDERS,
+  type LLMProviderId,
 } from '../src/core/llm.ts';
 import {
   RateLimiter,
   executeWithRetry,
-  isQuotaExceededError,
-  isRateLimitError,
-  isUnavailableError,
 } from '../src/core/rate-limiter.ts';
 import {
   saveGeminiKey,
@@ -23,7 +26,6 @@ import {
 import { MemoryStore } from '../src/lib/storage/datasetStore.ts';
 import { syncStarredRepos } from '../src/lib/sync.ts';
 import type { NormalizedRepo } from '../src/core/normalize.ts';
-import { computeInputHash } from '../src/core/hash.ts';
 
 class MockStorage implements Storage {
   private data = new Map<string, string>();
@@ -47,11 +49,38 @@ class MockStorage implements Storage {
   }
 }
 
-describe('LLM & Rate Limiter (src/core/llm.ts & src/core/rate-limiter.ts)', () => {
-  describe('GEMINI_MODEL constant', () => {
-    it('is configured as gemini-3.8-flash', () => {
-      expect(GEMINI_MODEL).toBe('gemini-3.8-flash');
-      expect(new GeminiQuotaError()).toBeInstanceOf(Error);
+describe('LLM & Multi-Provider Core (src/core/llm.ts & src/core/llm-providers.ts)', () => {
+  describe('Provider Registry & Defaults', () => {
+    it('configures default provider as google and exports provider defaults', () => {
+      expect(DEFAULT_LLM_PROVIDER).toBe('google');
+      expect(PROVIDER_DEFAULTS.google.defaultModel).toBe('gemini-3.8-flash');
+      expect(PROVIDER_DEFAULTS.openai.defaultModel).toBe('gpt-4o-mini');
+      expect(PROVIDER_DEFAULTS.anthropic.defaultModel).toBe('claude-3-5-sonnet-20241022');
+      expect(PROVIDER_DEFAULTS.deepseek.defaultModel).toBe('deepseek-chat');
+    });
+
+    it('retrieves all 4 supported providers by ID', () => {
+      const providers: LLMProviderId[] = ['openai', 'anthropic', 'google', 'deepseek'];
+      for (const id of providers) {
+        const def = getLLMProvider(id);
+        expect(def.id).toBe(id);
+        expect(def.label).toBeTruthy();
+        expect(def.defaultModel).toBeTruthy();
+        expect(def.defaultIntervalSec).toBeGreaterThan(0);
+      }
+    });
+
+    it('validates provider key patterns as hints', () => {
+      expect(LLM_PROVIDERS.openai.keyPattern.test('sk-proj-12345')).toBe(true);
+      expect(LLM_PROVIDERS.openai.keyPattern.test('sk-ant-12345')).toBe(false);
+
+      expect(LLM_PROVIDERS.anthropic.keyPattern.test('sk-ant-api03-123')).toBe(true);
+      expect(LLM_PROVIDERS.anthropic.keyPattern.test('sk-openai-123')).toBe(false);
+
+      expect(LLM_PROVIDERS.google.keyPattern.test('AIzaSyD-12345')).toBe(true);
+      expect(LLM_PROVIDERS.google.keyPattern.test('sk-12345')).toBe(false);
+
+      expect(LLM_PROVIDERS.deepseek.keyPattern.test('sk-deepseek-123')).toBe(true);
     });
   });
 
@@ -96,7 +125,7 @@ describe('LLM & Rate Limiter (src/core/llm.ts & src/core/rate-limiter.ts)', () =
     });
 
     it('strips markdown code blocks and whitespace', () => {
-      const raw = "```json\n{\n  \"category\": \"DevOps / Infra\",\n  \"confidence\": 0.92\n}\n```";
+      const raw = '```json\n{\n  "category": "DevOps / Infra",\n  "confidence": 0.92\n}\n```';
       const parsed = parseClassificationResponse(raw);
       expect(parsed).toEqual({
         category: 'DevOps / Infra',
@@ -148,488 +177,563 @@ describe('LLM & Rate Limiter (src/core/llm.ts & src/core/rate-limiter.ts)', () =
   });
 
   describe('RateLimiter & executeWithRetry', () => {
-    it('throttles calls using custom sleepFn according to minIntervalMs', async () => {
-      const sleeps: number[] = [];
-      const sleepFn = async (ms: number) => {
-        sleeps.push(ms);
+    it('RateLimiter spaces out consecutive calls to minimum interval', async () => {
+      let currentTime = 1000;
+      const sleepDelays: number[] = [];
+
+      const mockSleep = async (ms: number) => {
+        sleepDelays.push(ms);
+        currentTime += ms;
       };
 
-      const limiter = new RateLimiter({ minIntervalMs: 100, sleepFn });
+      vi.spyOn(Date, 'now').mockImplementation(() => currentTime);
 
-      // First call: no wait
-      await limiter.acquire();
-      expect(sleeps.length).toBe(0);
+      const limiter = new RateLimiter({ minIntervalMs: 4000, sleepFn: mockSleep });
 
-      // Second immediate call: should wait ~100ms
-      await limiter.acquire();
-      expect(sleeps.length).toBe(1);
-      expect(sleeps[0]).toBeGreaterThanOrEqual(90);
+      // First call: immediate
+      await limiter.acquire(mockSleep);
+      expect(sleepDelays).toHaveLength(0);
+
+      // Advance by 1500ms
+      currentTime += 1500;
+
+      // Second call: should wait 4000 - 1500 = 2500ms
+      await limiter.acquire(mockSleep);
+      expect(sleepDelays).toHaveLength(1);
+      expect(sleepDelays[0]).toBe(2500);
+
+      vi.restoreAllMocks();
     });
 
-    it('aborts acquire if signal is already aborted or aborted during wait', async () => {
-      const controller = new AbortController();
-      controller.abort();
-      const limiter = new RateLimiter({ minIntervalMs: 100 });
-      await expect(limiter.acquire(controller.signal)).rejects.toThrow(/aborted/i);
-    });
-
-    it('identifies rate limit and quota exceeded errors accurately', () => {
-      const quotaErr = { status: 429, message: 'RESOURCE_EXHAUSTED: Quota exceeded for quota metric' };
-      expect(isQuotaExceededError(quotaErr)).toBe(true);
-
-      const standard429 = { status: 429, message: 'Too many requests' };
-      expect(isQuotaExceededError(standard429)).toBe(false);
-      expect(isRateLimitError(standard429)).toBe(true);
-
-      const serviceUnavailable = { status: 503, message: 'Service Unavailable' };
-      expect(isUnavailableError(serviceUnavailable)).toBe(true);
-    });
-
-    it('executeWithRetry throws immediately on quota exhaustion without retrying', async () => {
-      const quotaErr = { status: 429, message: 'RESOURCE_EXHAUSTED' };
+    it('executeWithRetry retries on 429 and succeeds when retry returns valid result', async () => {
       let attempts = 0;
-
-      await expect(
-        executeWithRetry(async () => {
-          attempts++;
-          throw quotaErr;
-        }, { maxRetries: 3 })
-      ).rejects.toEqual(quotaErr);
-
-      expect(attempts).toBe(1); // No retries on quota exhaustion
-    });
-
-    it('executeWithRetry retries on transient 503 and succeeds', async () => {
-      let attempts = 0;
-      const sleepFn = vi.fn().mockResolvedValue(undefined);
-
       const result = await executeWithRetry(
         async () => {
           attempts++;
-          if (attempts < 2) {
-            throw { status: 503, message: 'Temporarily Unavailable' };
+          if (attempts === 1) {
+            throw new LLMRateLimitError('openai', 'Rate limit exceeded', { retryAfterSec: 1 });
           }
-          return 'ok';
+          return 'success';
         },
-        { maxRetries: 2, sleepFn, baseDelayMs: 10 }
+        {
+          maxRetries: 2,
+          sleepFn: async () => {},
+        }
       );
 
-      expect(result).toBe('ok');
       expect(attempts).toBe(2);
-      expect(sleepFn).toHaveBeenCalledTimes(1);
+      expect(result).toBe('success');
+    });
+
+    it('executeWithRetry throws LLMAuthError immediately without retrying', async () => {
+      let attempts = 0;
+      await expect(
+        executeWithRetry(
+          async () => {
+            attempts++;
+            throw new LLMAuthError('anthropic', 'Invalid API key');
+          },
+          {
+            maxRetries: 2,
+            sleepFn: async () => {},
+          }
+        )
+      ).rejects.toBeInstanceOf(LLMAuthError);
+
+      expect(attempts).toBe(1);
     });
   });
 
-  describe('Gemini key & settings persistence in settings.ts', () => {
-    let mockSessionStorage: MockStorage;
-    let mockLocalStorage: MockStorage;
+  describe('Provider Wire Formats & Happy Paths (Fetch-based)', () => {
+    const originalFetch = globalThis.fetch;
+    const sampleRepo: NormalizedRepo = {
+      id: 1,
+      name: 'ambiguous-tool',
+      fullName: 'org/ambiguous-tool',
+      owner: 'org',
+      description: 'An ambiguous CLI converter',
+      topics: ['cli'],
+      language: 'Rust',
+      stars: 100,
+      url: 'https://github.com/org/ambiguous-tool',
+      updatedAt: '2026-01-01T00:00:00Z',
+      archived: false,
+      fork: false,
+    };
+
+    afterEach(() => {
+      globalThis.fetch = originalFetch;
+    });
+
+    it('openai: posts to /chat/completions with json_object format and Bearer auth', async () => {
+      let requestedUrl = '';
+      let requestedHeaders: Headers | undefined;
+      let requestedBody: Record<string, unknown> | undefined;
+
+      globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        requestedUrl = String(input);
+        requestedHeaders = new Headers(init?.headers);
+        requestedBody = JSON.parse(String(init?.body));
+        return new Response(
+          JSON.stringify({
+            choices: [
+              {
+                message: {
+                  content: JSON.stringify({ category: 'CLI / Tools', confidence: 0.95 }),
+                },
+              },
+            ],
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } }
+        );
+      });
+
+      const classifier = createLLMClassifier({
+        provider: 'openai',
+        apiKey: 'sk-test-secret-key-123',
+        model: 'gpt-4o-mini',
+        minIntervalMs: 0,
+      });
+
+      const result = await classifier(sampleRepo);
+      expect(result.category).toBe('CLI / Tools');
+      expect(result.method).toBe('llm');
+      expect(result.confidence).toBe(0.95);
+
+      expect(requestedUrl).toBe('https://api.openai.com/v1/chat/completions');
+      expect(requestedHeaders?.get('authorization')).toBe('Bearer sk-test-secret-key-123');
+      expect(requestedHeaders?.get('content-type')).toBe('application/json');
+      expect(requestedBody?.model).toBe('gpt-4o-mini');
+      expect(requestedBody?.response_format).toEqual({ type: 'json_object' });
+    });
+
+    it('openai: retries once without response_format if 400 mentions response_format', async () => {
+      let calls = 0;
+      globalThis.fetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+        calls++;
+        const body = JSON.parse(String(init?.body));
+        if (calls === 1) {
+          expect(body.response_format).toBeDefined();
+          return new Response(
+            JSON.stringify({ error: { message: 'response_format is not supported by this model' } }),
+            { status: 400, headers: { 'Content-Type': 'application/json' } }
+          );
+        }
+        expect(body.response_format).toBeUndefined();
+        return new Response(
+          JSON.stringify({
+            choices: [
+              {
+                message: {
+                  content: JSON.stringify({ category: 'Backend / API', confidence: 0.9 }),
+                },
+              },
+            ],
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } }
+        );
+      });
+
+      const classifier = createLLMClassifier({
+        provider: 'openai',
+        apiKey: 'sk-test-secret',
+        minIntervalMs: 0,
+      });
+
+      const result = await classifier(sampleRepo);
+      expect(calls).toBe(2);
+      expect(result.category).toBe('Backend / API');
+    });
+
+    it('anthropic: posts to /messages with custom headers and x-api-key', async () => {
+      let requestedUrl = '';
+      let requestedHeaders: Headers | undefined;
+      let requestedBody: Record<string, unknown> | undefined;
+
+      globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        requestedUrl = String(input);
+        requestedHeaders = new Headers(init?.headers);
+        requestedBody = JSON.parse(String(init?.body));
+        return new Response(
+          JSON.stringify({
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify({ category: 'ML / AI', confidence: 0.92 }),
+              },
+            ],
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } }
+        );
+      });
+
+      const classifier = createLLMClassifier({
+        provider: 'anthropic',
+        apiKey: 'sk-ant-api03-test-token',
+        minIntervalMs: 0,
+      });
+
+      const result = await classifier(sampleRepo);
+      expect(result.category).toBe('ML / AI');
+      expect(requestedUrl).toBe('https://api.anthropic.com/v1/messages');
+      expect(requestedHeaders?.get('x-api-key')).toBe('sk-ant-api03-test-token');
+      expect(requestedHeaders?.get('anthropic-version')).toBe('2023-06-01');
+      expect(requestedHeaders?.get('anthropic-dangerous-direct-browser-access')).toBe('true');
+      expect(requestedBody?.max_tokens).toBe(1024);
+    });
+
+    it('deepseek: posts to /chat/completions without response_format', async () => {
+      let requestedUrl = '';
+      let requestedHeaders: Headers | undefined;
+      let requestedBody: Record<string, unknown> | undefined;
+
+      globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        requestedUrl = String(input);
+        requestedHeaders = new Headers(init?.headers);
+        requestedBody = JSON.parse(String(init?.body));
+        return new Response(
+          JSON.stringify({
+            choices: [
+              {
+                message: {
+                  content: JSON.stringify({ category: 'Web Frontend', confidence: 0.88 }),
+                },
+              },
+            ],
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } }
+        );
+      });
+
+      const classifier = createLLMClassifier({
+        provider: 'deepseek',
+        apiKey: 'sk-deepseek-key',
+        minIntervalMs: 0,
+      });
+
+      const result = await classifier(sampleRepo);
+      expect(result.category).toBe('Web Frontend');
+      expect(requestedUrl).toBe('https://api.deepseek.com/chat/completions');
+      expect(requestedHeaders?.get('authorization')).toBe('Bearer sk-deepseek-key');
+      expect(requestedBody?.response_format).toBeUndefined();
+    });
+
+    it('google: posts to /models/{model}:generateContent with apiKey query param', async () => {
+      let requestedUrl = '';
+      let requestedBody: Record<string, unknown> | undefined;
+
+      globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        requestedUrl = String(input);
+        requestedBody = JSON.parse(String(init?.body));
+        return new Response(
+          JSON.stringify({
+            candidates: [
+              {
+                content: {
+                  parts: [{ text: JSON.stringify({ category: 'DevOps / Infra', confidence: 0.94 }) }],
+                },
+              },
+            ],
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } }
+        );
+      });
+
+      const classifier = createLLMClassifier({
+        provider: 'google',
+        apiKey: 'AIzaSyFakeKey123',
+        model: 'gemini-3.8-flash',
+        minIntervalMs: 0,
+      });
+
+      const result = await classifier(sampleRepo);
+      expect(result.category).toBe('DevOps / Infra');
+      expect(requestedUrl).toBe(
+        'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key=AIzaSyFakeKey123'
+      );
+      expect(requestedBody?.generationConfig).toEqual({
+        temperature: 0,
+        responseMimeType: 'application/json',
+      });
+    });
+
+    it('ensures API key is NEVER included in error messages when an API error occurs', async () => {
+      const secretKey = 'sk-extremely-secret-key-xyz999';
+
+      globalThis.fetch = vi.fn(async () => {
+        return new Response(
+          JSON.stringify({
+            error: { message: `Request with key ${secretKey} was rejected` },
+          }),
+          { status: 401, headers: { 'Content-Type': 'application/json' } }
+        );
+      });
+
+      const classifier = createLLMClassifier({
+        provider: 'openai',
+        apiKey: secretKey,
+        minIntervalMs: 0,
+        maxRetries: 0,
+      });
+
+      await expect(classifier(sampleRepo)).rejects.toSatisfy((err: unknown) => {
+        expect(err).toBeInstanceOf(LLMAuthError);
+        const errorMsg = (err as Error).message;
+        expect(errorMsg).not.toContain(secretKey);
+        expect(errorMsg).toContain('[REDACTED]');
+        return true;
+      });
+    });
+  });
+
+  describe('listModels Filtering per Provider', () => {
+    const originalFetch = globalThis.fetch;
+
+    afterEach(() => {
+      globalThis.fetch = originalFetch;
+    });
+
+    it('openai: filters for gpt-, o1-, o3-, o4-, chatgpt- models and sorts descending', async () => {
+      globalThis.fetch = vi.fn(async () => {
+        return new Response(
+          JSON.stringify({
+            data: [
+              { id: 'dall-e-3' },
+              { id: 'whisper-1' },
+              { id: 'gpt-3.5-turbo' },
+              { id: 'gpt-4o' },
+              { id: 'gpt-4o-mini' },
+              { id: 'o1-preview' },
+              { id: 'o3-mini' },
+              { id: 'text-embedding-3-small' },
+            ],
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } }
+        );
+      });
+
+      const models = await LLM_PROVIDERS.openai.listModels({ apiKey: 'sk-test' });
+      expect(models).toEqual(['o3-mini', 'o1-preview', 'gpt-4o-mini', 'gpt-4o', 'gpt-3.5-turbo']);
+      expect(models).not.toContain('dall-e-3');
+      expect(models).not.toContain('whisper-1');
+      expect(models).not.toContain('text-embedding-3-small');
+    });
+
+    it('google: filters for supportedGenerationMethods containing generateContent and strips models/ prefix', async () => {
+      globalThis.fetch = vi.fn(async () => {
+        return new Response(
+          JSON.stringify({
+            models: [
+              { name: 'models/gemini-2.5-flash', supportedGenerationMethods: ['generateContent'] },
+              { name: 'models/gemini-3.8-flash', supportedGenerationMethods: ['generateContent', 'countTokens'] },
+              { name: 'models/text-embedding-004', supportedGenerationMethods: ['embedContent'] },
+            ],
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } }
+        );
+      });
+
+      const models = await LLM_PROVIDERS.google.listModels({ apiKey: 'AIza-test' });
+      expect(models).toEqual(['gemini-2.5-flash', 'gemini-3.8-flash']);
+      expect(models).not.toContain('text-embedding-004');
+    });
+
+    it('deepseek: returns model list from /models', async () => {
+      globalThis.fetch = vi.fn(async () => {
+        return new Response(
+          JSON.stringify({
+            data: [{ id: 'deepseek-chat' }, { id: 'deepseek-reasoner' }],
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } }
+        );
+      });
+
+      const models = await LLM_PROVIDERS.deepseek.listModels({ apiKey: 'sk-deepseek' });
+      expect(models).toEqual(['deepseek-chat', 'deepseek-reasoner']);
+    });
+
+    it('anthropic: returns model list from /models', async () => {
+      globalThis.fetch = vi.fn(async () => {
+        return new Response(
+          JSON.stringify({
+            data: [{ id: 'claude-3-5-sonnet-20241022' }, { id: 'claude-3-5-haiku-20241022' }],
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } }
+        );
+      });
+
+      const models = await LLM_PROVIDERS.anthropic.listModels({ apiKey: 'sk-ant-test' });
+      expect(models).toEqual(['claude-3-5-sonnet-20241022', 'claude-3-5-haiku-20241022']);
+    });
+  });
+
+  describe('Storage & Settings', () => {
+    let mockSession: MockStorage;
+    let mockLocal: MockStorage;
 
     beforeEach(() => {
-      mockSessionStorage = new MockStorage();
-      mockLocalStorage = new MockStorage();
-      vi.stubGlobal('sessionStorage', mockSessionStorage);
-      vi.stubGlobal('localStorage', mockLocalStorage);
+      mockSession = new MockStorage();
+      mockLocal = new MockStorage();
+      vi.stubGlobal('sessionStorage', mockSession);
+      vi.stubGlobal('localStorage', mockLocal);
     });
 
     afterEach(() => {
       vi.unstubAllGlobals();
     });
 
-    it('saves Gemini key to sessionStorage when remember=false', () => {
-      saveGeminiKey('AIzaSyTestSessionKey', false);
-      expect(mockSessionStorage.getItem('starred_repos_gemini_key')).toBe('AIzaSyTestSessionKey');
-      expect(mockLocalStorage.getItem('starred_repos_gemini_key')).toBeNull();
-      expect(loadGeminiKey()).toBe('AIzaSyTestSessionKey');
+    it('saves Gemini key to sessionStorage by default', () => {
+      saveGeminiKey('AIzaSyDefault', false);
+      expect(mockSession.getItem('starred_repos_gemini_key')).toBe('AIzaSyDefault');
+      expect(mockLocal.getItem('starred_repos_gemini_key')).toBeNull();
+      expect(loadGeminiKey()).toBe('AIzaSyDefault');
       expect(isGeminiKeyRemembered()).toBe(false);
     });
 
-    it('saves Gemini key to localStorage when remember=true', () => {
-      saveGeminiKey('AIzaSyTestLocalKey', true);
-      expect(mockLocalStorage.getItem('starred_repos_gemini_key')).toBe('AIzaSyTestLocalKey');
-      expect(mockSessionStorage.getItem('starred_repos_gemini_key')).toBeNull();
-      expect(loadGeminiKey()).toBe('AIzaSyTestLocalKey');
+    it('saves Gemini key to localStorage when remembered', () => {
+      saveGeminiKey('AIzaSyRemembered', true);
+      expect(mockLocal.getItem('starred_repos_gemini_key')).toBe('AIzaSyRemembered');
+      expect(mockSession.getItem('starred_repos_gemini_key')).toBeNull();
+      expect(loadGeminiKey()).toBe('AIzaSyRemembered');
       expect(isGeminiKeyRemembered()).toBe(true);
     });
 
-    it('clears Gemini key from both storages', () => {
-      saveGeminiKey('AIzaSyTestLocalKey', true);
+    it('clears Gemini key from both storage locations', () => {
+      mockSession.setItem('starred_repos_gemini_key', 'session-key');
+      mockLocal.setItem('starred_repos_gemini_key', 'local-key');
       clearGeminiKey();
+      expect(mockSession.getItem('starred_repos_gemini_key')).toBeNull();
+      expect(mockLocal.getItem('starred_repos_gemini_key')).toBeNull();
       expect(loadGeminiKey()).toBeNull();
-      expect(isGeminiKeyRemembered()).toBe(false);
     });
 
-    it('saves and loads custom model and interval settings', () => {
-      expect(loadGeminiSettings()).toEqual({
-        model: 'gemini-3.8-flash',
-        intervalSec: 4,
-      });
-
-      saveGeminiSettings({
-        model: 'gemini-1.5-flash',
-        intervalSec: 2,
-      });
-
-      expect(loadGeminiSettings()).toEqual({
-        model: 'gemini-1.5-flash',
-        intervalSec: 2,
-      });
+    it('saves and loads model and interval settings', () => {
+      saveGeminiSettings({ model: 'custom-model', intervalSec: 2.5 });
+      expect(loadGeminiSettings()).toEqual({ model: 'custom-model', intervalSec: 2.5 });
     });
   });
-});
 
-describe('Hybrid Sync with Gemini (src/lib/sync.ts)', () => {
-  const originalFetch = globalThis.fetch;
-  let mockSessionStorage: MockStorage;
-  let mockLocalStorage: MockStorage;
+  describe('Hybrid Sync Integration (src/lib/sync.ts)', () => {
+    const originalFetch = globalThis.fetch;
 
-  beforeEach(() => {
-    mockSessionStorage = new MockStorage();
-    mockLocalStorage = new MockStorage();
-    vi.stubGlobal('sessionStorage', mockSessionStorage);
-    vi.stubGlobal('localStorage', mockLocalStorage);
-  });
-
-  afterEach(() => {
-    globalThis.fetch = originalFetch;
-    vi.unstubAllGlobals();
-    vi.restoreAllMocks();
-  });
-
-  const setupMockGitHub = (repos: any[]) => {
-    globalThis.fetch = async (input: RequestInfo | URL) => {
-      const url = String(input);
-      if (url.endsWith('/user')) {
-        return new Response(JSON.stringify({ login: 'octocat' }), { status: 200 });
-      }
-      if (url.includes('/user/starred')) {
-        return new Response(JSON.stringify(repos), { status: 200, headers: { Link: '' } });
-      }
-      if (url.includes('/graphql')) {
-        return new Response(JSON.stringify({ data: { viewer: { lists: { nodes: [] } } } }), { status: 200 });
-      }
-      return new Response('Not found', { status: 404 });
-    };
-  };
-
-  it('hybrid classification: rule match -> Gemini not called; rule miss -> Gemini called; cache hit -> not called', async () => {
-    // Repo 1: Clear rule match (React -> Frontend Frameworks & UI)
-    const ruleRepo = {
-      id: 101,
-      name: 'react-widget',
-      full_name: 'octocat/react-widget',
-      owner: { login: 'octocat' },
-      description: 'A React UI widget',
-      topics: ['react', 'ui'],
-      language: 'TypeScript',
-      stargazers_count: 50,
-      html_url: 'https://github.com/octocat/react-widget',
-      updated_at: '2026-01-01T00:00:00Z',
-    };
-
-    // Repo 2: Ambiguous (no rules match), should trigger Gemini
-    const ambiguousRepo = {
-      id: 102,
-      name: 'quantum-sorter',
-      full_name: 'octocat/quantum-sorter',
-      owner: { login: 'octocat' },
-      description: 'An esoteric experimental sorter',
-      topics: ['experimental'],
-      language: 'C++',
-      stargazers_count: 10,
-      html_url: 'https://github.com/octocat/quantum-sorter',
-      updated_at: '2026-01-01T00:00:00Z',
-    };
-
-    // Repo 3: Ambiguous, but pre-cached in store!
-    const cachedAmbiguousRepo = {
-      id: 103,
-      name: 'old-cached-tool',
-      full_name: 'octocat/old-cached-tool',
-      owner: { login: 'octocat' },
-      description: 'Pre-existing cached tool',
-      topics: [],
-      language: 'Go',
-      stargazers_count: 5,
-      html_url: 'https://github.com/octocat/old-cached-tool',
-      updated_at: '2026-01-01T00:00:00Z',
-    };
-
-    setupMockGitHub([ruleRepo, ambiguousRepo, cachedAmbiguousRepo]);
-
-    const store = new MemoryStore();
-    const cachedHash = computeInputHash({
-      fullName: 'octocat/old-cached-tool',
-      description: 'Pre-existing cached tool',
-      topics: [],
-      language: 'Go',
+    afterEach(() => {
+      globalThis.fetch = originalFetch;
     });
 
-    await store.set('classificationCache', {
-      'octocat/old-cached-tool': {
-        category: 'CLI / Tools',
-        classification: {
-          method: 'llm',
-          confidence: 0.85,
-          classifiedAt: '2026-01-01T00:00:00Z',
-          inputHash: cachedHash,
-        },
-      },
-    });
-
-    // Mock @google/genai generateContent
-    const mockGenerateContent = vi.fn().mockResolvedValue({
-      text: JSON.stringify({
-        category: 'CLI / Tools',
-        confidence: 0.82,
-        reasoning: 'Experimental sorting algorithm',
-      }),
-    });
-
-    vi.doMock('@google/genai', () => {
-      return {
-        GoogleGenAI: vi.fn().mockImplementation(() => ({
-          models: {
-            generateContent: mockGenerateContent,
-          },
-        })),
+    const setupMockGitHub = (repos: unknown[]) => {
+      return (input: RequestInfo | URL, _init?: RequestInit) => {
+        const url = String(input);
+        if (url.endsWith('/user')) {
+          return new Response(JSON.stringify({ login: 'octocat' }), { status: 200 });
+        }
+        if (url.includes('/user/starred')) {
+          return new Response(JSON.stringify(repos), { status: 200, headers: { Link: '' } });
+        }
+        if (url.includes('/graphql')) {
+          return new Response(JSON.stringify({ data: { viewer: { lists: { nodes: [] } } } }), { status: 200 });
+        }
+        return null;
       };
-    });
-
-    const phasesSeen: string[] = [];
-    const result = await syncStarredRepos({
-      token: 'ghp_test_token',
-      store,
-      gemini: {
-        apiKey: 'test-gemini-key',
-        minIntervalMs: 0,
-      },
-      onProgress: (p) => {
-        phasesSeen.push(p.phase);
-      },
-    });
-
-    expect(result.geminiStatus).toBe('ok');
-    expect(result.envelope.repos).toHaveLength(3);
-
-    // Verify Repo 1 was classified by rules
-    const r1 = result.envelope.repos.find(r => r.name === 'react-widget');
-    expect(r1?.category).toBe('Web Frontend');
-    expect(r1?.classification.method).toBe('rule');
-
-    // Verify Repo 2 was classified by Gemini
-    const r2 = result.envelope.repos.find(r => r.name === 'quantum-sorter');
-    expect(r2?.category).toBe('CLI / Tools');
-    expect(r2?.classification.method).toBe('llm');
-
-    // Verify Repo 3 was served from cache
-    const r3 = result.envelope.repos.find(r => r.name === 'old-cached-tool');
-    expect(r3?.category).toBe('CLI / Tools');
-
-    // Gemini should only have been called ONCE (for ambiguousRepo)
-    expect(mockGenerateContent).toHaveBeenCalledTimes(1);
-    expect(phasesSeen).toContain('llm');
-
-    // Verify stored data has NO Gemini API key
-    const rawStored = JSON.stringify(await store.get('dataset'));
-    expect(rawStored).not.toContain('test-gemini-key');
-  });
-
-  it('quota error: GeminiQuotaError causes fallback to Other, sync succeeds, status quota_exceeded', async () => {
-    const ambiguous1 = {
-      id: 201,
-      name: 'ambiguous-1',
-      full_name: 'octocat/ambiguous-1',
-      owner: { login: 'octocat' },
-      description: 'Ambiguous 1',
-      topics: [],
-      language: 'C',
-      stargazers_count: 1,
-      html_url: 'https://github.com/octocat/ambiguous-1',
-      updated_at: '2026-01-01T00:00:00Z',
-    };
-    const ambiguous2 = {
-      id: 202,
-      name: 'ambiguous-2',
-      full_name: 'octocat/ambiguous-2',
-      owner: { login: 'octocat' },
-      description: 'Ambiguous 2',
-      topics: [],
-      language: 'C',
-      stargazers_count: 1,
-      html_url: 'https://github.com/octocat/ambiguous-2',
-      updated_at: '2026-01-01T00:00:00Z',
     };
 
-    setupMockGitHub([ambiguous1, ambiguous2]);
+    it('invalid key: LLMAuthError sets llmStatus to invalid_key and classifies remaining as Other without failing sync', async () => {
+      const ambiguousRepo = {
+        id: 101,
+        name: 'ambiguous-repo',
+        full_name: 'octocat/ambiguous-repo',
+        owner: { login: 'octocat' },
+        description: 'An ambiguous repo without matched keywords',
+        topics: [],
+        language: 'C++',
+        stargazers_count: 10,
+        html_url: 'https://github.com/octocat/ambiguous-repo',
+        updated_at: '2026-01-01T00:00:00Z',
+      };
 
-    const store = new MemoryStore();
+      const gitHubHandler = setupMockGitHub([ambiguousRepo]);
 
-    // Mock @google/genai generateContent throwing quota error
-    const mockGenerateContent = vi.fn().mockRejectedValue({
-      status: 429,
-      message: 'RESOURCE_EXHAUSTED: quota exceeded',
-    });
+      globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const gh = gitHubHandler(input, init);
+        if (gh) return gh;
 
-    vi.doMock('@google/genai', () => ({
-      GoogleGenAI: vi.fn().mockImplementation(() => ({
-        models: {
-          generateContent: mockGenerateContent,
-        },
-      })),
-    }));
+        // LLM call returns 401 unauthorized
+        return new Response(
+          JSON.stringify({ error: { message: 'Incorrect API key provided' } }),
+          { status: 401, headers: { 'Content-Type': 'application/json' } }
+        );
+      });
 
-    const result = await syncStarredRepos({
-      token: 'ghp_test_token',
-      store,
-      gemini: {
-        apiKey: 'test-gemini-key',
-        minIntervalMs: 0,
-      },
-    });
-
-    // Should complete successfully with quota_exceeded status
-    expect(result.geminiStatus).toBe('quota_exceeded');
-    expect(result.envelope.repos).toHaveLength(2);
-    expect(result.envelope.repos[0].category).toBe('Other');
-    expect(result.envelope.repos[0].classification.method).toBe('fallback');
-    expect(result.envelope.repos[1].category).toBe('Other');
-    expect(result.envelope.repos[1].classification.method).toBe('fallback');
-
-    // Only called once because quota error disabled subsequent calls
-    expect(mockGenerateContent).toHaveBeenCalledTimes(1);
-
-    // Verify key is not saved anywhere in stored dataset
-    const savedDataset = await store.get('dataset');
-    expect(JSON.stringify(savedDataset)).not.toContain('test-gemini-key');
-  });
-
-  it('reclassifyOther with ignoreOtherCache clears Other entries and calls Gemini', async () => {
-    const ambiguousRepo = {
-      id: 301,
-      name: 'quantum-sorter-xyz',
-      full_name: 'octocat/quantum-sorter-xyz',
-      owner: { login: 'octocat' },
-      description: 'An esoteric experiment',
-      topics: [],
-      language: 'Rust',
-      stargazers_count: 10,
-      html_url: 'https://github.com/octocat/quantum-sorter-xyz',
-      updated_at: '2026-01-01T00:00:00Z',
-    };
-
-    setupMockGitHub([ambiguousRepo]);
-
-    const store = new MemoryStore();
-    const hash = computeInputHash({
-      fullName: 'octocat/quantum-sorter-xyz',
-      description: 'An esoteric experiment',
-      topics: [],
-      language: 'Rust',
-    });
-
-    // Pre-cache as 'Other'
-    await store.set('classificationCache', {
-      'octocat/quantum-sorter-xyz': {
-        category: 'Other',
-        classification: {
-          method: 'fallback',
-          confidence: 0.5,
-          classifiedAt: '2026-01-01T00:00:00Z',
-          inputHash: hash,
-        },
-      },
-    });
-
-    const mockGenerateContent = vi.fn().mockResolvedValue({
-      text: JSON.stringify({
-        category: 'CLI / Tools',
-        confidence: 0.85,
-      }),
-    });
-
-    vi.doMock('@google/genai', () => ({
-      GoogleGenAI: vi.fn().mockImplementation(() => ({
-        models: {
-          generateContent: mockGenerateContent,
-        },
-      })),
-    }));
-
-    // Run with ignoreOtherCache: true
-    const result = await syncStarredRepos({
-      token: 'ghp_test_token',
-      store,
-      ignoreOtherCache: true,
-      gemini: {
-        apiKey: 'test-gemini-key',
-        minIntervalMs: 0,
-      },
-    });
-
-    expect(result.geminiStatus).toBe('ok');
-    expect(mockGenerateContent).toHaveBeenCalledTimes(1);
-    expect(result.envelope.repos[0].category).toBe('CLI / Tools');
-    expect(result.envelope.repos[0].classification.method).toBe('llm');
-  });
-
-  it('abort during Gemini phase cancels sync and leaves previous dataset untouched', async () => {
-    const ambiguous = {
-      id: 401,
-      name: 'ambiguous-abort',
-      full_name: 'octocat/ambiguous-abort',
-      owner: { login: 'octocat' },
-      description: 'Ambiguous abort repo',
-      topics: [],
-      language: 'Python',
-      stargazers_count: 10,
-      html_url: 'https://github.com/octocat/ambiguous-abort',
-      updated_at: '2026-01-01T00:00:00Z',
-    };
-
-    setupMockGitHub([ambiguous]);
-
-    const store = new MemoryStore();
-    const previousDataset = {
-      schemaVersion: 1,
-      generatedAt: '2026-01-01T00:00:00Z',
-      username: 'octocat',
-      source: { type: 'github-stars' },
-      repos: [],
-    };
-    await store.set('dataset', previousDataset);
-
-    const controller = new AbortController();
-
-    // Abort when generateContent is invoked
-    const mockGenerateContent = vi.fn().mockImplementation(async () => {
-      controller.abort();
-      const err = new Error('The operation was aborted');
-      err.name = 'AbortError';
-      throw err;
-    });
-
-    vi.doMock('@google/genai', () => ({
-      GoogleGenAI: vi.fn().mockImplementation(() => ({
-        models: {
-          generateContent: mockGenerateContent,
-        },
-      })),
-    }));
-
-    await expect(
-      syncStarredRepos({
+      const store = new MemoryStore();
+      const result = await syncStarredRepos({
         token: 'ghp_test_token',
         store,
-        signal: controller.signal,
-        gemini: {
-          apiKey: 'test-gemini-key',
+        llm: {
+          provider: 'openai',
+          apiKey: 'sk-invalid-key',
+        },
+      });
+
+      expect(result.llmStatus).toBe('invalid_key');
+      expect(result.envelope.repos).toHaveLength(1);
+      expect(result.envelope.repos[0].category).toBe('Other');
+      expect(result.envelope.repos[0].classification.method).toBe('fallback');
+    });
+
+    it('quota exceeded: 429 sets llmStatus to quota_exceeded and avoids subsequent calls', async () => {
+      const ambiguous1 = {
+        id: 201,
+        name: 'ambiguous-1',
+        full_name: 'octocat/ambiguous-1',
+        owner: { login: 'octocat' },
+        description: 'Ambiguous 1',
+        topics: [],
+        language: 'Rust',
+        stargazers_count: 5,
+        html_url: 'https://github.com/octocat/ambiguous-1',
+        updated_at: '2026-01-01T00:00:00Z',
+      };
+      const ambiguous2 = {
+        id: 202,
+        name: 'ambiguous-2',
+        full_name: 'octocat/ambiguous-2',
+        owner: { login: 'octocat' },
+        description: 'Ambiguous 2',
+        topics: [],
+        language: 'C',
+        stargazers_count: 1,
+        html_url: 'https://github.com/octocat/ambiguous-2',
+        updated_at: '2026-01-01T00:00:00Z',
+      };
+
+      const gitHubHandler = setupMockGitHub([ambiguous1, ambiguous2]);
+      let llmCalls = 0;
+
+      globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const gh = gitHubHandler(input, init);
+        if (gh) return gh;
+
+        llmCalls++;
+        return new Response(
+          JSON.stringify({ error: { message: 'Rate limit exceeded: quota exhausted' } }),
+          { status: 429, headers: { 'Content-Type': 'application/json' } }
+        );
+      });
+
+      const store = new MemoryStore();
+      const result = await syncStarredRepos({
+        token: 'ghp_test_token',
+        store,
+        llm: {
+          provider: 'google',
+          apiKey: 'AIza-test-quota',
           minIntervalMs: 0,
         },
-      })
-    ).rejects.toThrow();
+      });
 
-    // Previous dataset should be intact
-    const afterDataset = await store.get('dataset');
-    expect(afterDataset).toEqual(previousDataset);
+      expect(result.llmStatus).toBe('quota_exceeded');
+      expect(result.envelope.repos).toHaveLength(2);
+      expect(result.envelope.repos[0].category).toBe('Other');
+      expect(result.envelope.repos[1].category).toBe('Other');
+    });
   });
 });

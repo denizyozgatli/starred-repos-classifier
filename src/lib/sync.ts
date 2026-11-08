@@ -2,7 +2,12 @@ import { getAuthenticatedUser, fetchStarredRepos, GitHubApiError } from '../core
 import { fetchUserStarLists, mergeStarLists } from '../core/star-lists.ts';
 import { classifyRepos, type ClassificationCache } from '../core/classify-repos.ts';
 import { classifyWithRules, type ClassificationResult } from '../core/classifier.ts';
-import { createGeminiClassifier, GeminiQuotaError, GEMINI_MODEL } from '../core/llm.ts';
+import {
+  createLLMClassifier,
+  type LLMProviderId,
+  LLMRateLimitError,
+  LLMAuthError,
+} from '../core/llm.ts';
 import { computeInputHash } from '../core/hash.ts';
 import { buildDatasetEnvelope } from '../core/dataset.ts';
 import type { DatasetEnvelope } from '../types/repo.ts';
@@ -99,7 +104,8 @@ export function mapToSyncError(err: unknown): SyncError {
   );
 }
 
-export type GeminiSyncStatus = 'disabled' | 'ok' | 'partial' | 'quota_exceeded';
+export type LLMSyncStatus = 'disabled' | 'ok' | 'partial' | 'quota_exceeded' | 'invalid_key';
+export type GeminiSyncStatus = LLMSyncStatus;
 
 export interface SyncProgress {
   phase: 'fetching' | 'classifying' | 'llm';
@@ -119,21 +125,27 @@ export interface SyncResult {
   envelope: DatasetEnvelope;
   listsUnavailable: boolean;
   stats: SyncStats;
-  geminiStatus: GeminiSyncStatus;
+  llmStatus: LLMSyncStatus;
+  llmErrors?: number;
+  geminiStatus: LLMSyncStatus;
   geminiErrors?: number;
 }
 
-export interface GeminiSyncOptions {
+export interface LLMSyncOptions {
+  provider?: LLMProviderId;
   apiKey: string;
   model?: string;
+  minIntervalSec?: number;
   minIntervalMs?: number;
 }
+export type GeminiSyncOptions = LLMSyncOptions;
 
 export interface SyncStarredReposOptions {
   token: string;
   store: KeyValueStore;
   signal?: AbortSignal;
   onProgress?: (progress: SyncProgress) => void;
+  llm?: LLMSyncOptions;
   gemini?: GeminiSyncOptions;
   ignoreOtherCache?: boolean;
 }
@@ -210,7 +222,9 @@ export function resolveSyncFailure(
  * 5. Persists dataset envelope, cache, and metadata to storage
  */
 export async function syncStarredRepos(options: SyncStarredReposOptions): Promise<SyncResult> {
-  const { token, store, signal, onProgress, gemini, ignoreOtherCache } = options;
+  const { token, store, signal, onProgress, ignoreOtherCache } = options;
+  const effectiveLlm: LLMSyncOptions | undefined =
+    options.llm ?? (options.gemini ? { provider: 'google', ...options.gemini } : undefined);
 
   if (signal?.aborted) {
     throw new SyncError('Sync operation was aborted.', 'aborted');
@@ -278,18 +292,25 @@ export async function syncStarredRepos(options: SyncStarredReposOptions): Promis
       throw new SyncError('Sync operation was aborted.', 'aborted');
     }
 
-    let geminiStatus: GeminiSyncStatus = 'disabled';
-    let geminiErrorCount = 0;
+    let llmStatus: LLMSyncStatus = 'disabled';
+    let llmErrorCount = 0;
     let quotaExceeded = false;
-    let geminiAttemptCount = 0;
+    let invalidKey = false;
+    let llmAttemptCount = 0;
     let llmClassify: ((repo: NormalizedRepo) => Promise<ClassificationResult>) | undefined = undefined;
 
-    if (gemini && gemini.apiKey.trim()) {
-      geminiStatus = 'ok';
-      const classifier = createGeminiClassifier({
-        apiKey: gemini.apiKey.trim(),
-        model: gemini.model || GEMINI_MODEL,
-        minIntervalMs: gemini.minIntervalMs,
+    if (effectiveLlm && effectiveLlm.apiKey.trim()) {
+      llmStatus = 'ok';
+      const provider = effectiveLlm.provider || 'google';
+      const minIntervalMs =
+        effectiveLlm.minIntervalMs ??
+        (effectiveLlm.minIntervalSec ? effectiveLlm.minIntervalSec * 1000 : undefined);
+
+      const classifier = createLLMClassifier({
+        provider,
+        apiKey: effectiveLlm.apiKey.trim(),
+        model: effectiveLlm.model,
+        minIntervalMs,
         signal,
       });
 
@@ -308,7 +329,7 @@ export async function syncStarredRepos(options: SyncStarredReposOptions): Promis
           return ruleResult;
         }
 
-        if (quotaExceeded) {
+        if (quotaExceeded || invalidKey) {
           return {
             category: 'Other',
             method: 'fallback',
@@ -316,10 +337,10 @@ export async function syncStarredRepos(options: SyncStarredReposOptions): Promis
           };
         }
 
-        geminiAttemptCount++;
+        llmAttemptCount++;
         onProgress?.({
           phase: 'llm',
-          done: geminiAttemptCount,
+          done: llmAttemptCount,
           total: totalLlm,
           repoName: repo.name,
         });
@@ -330,18 +351,28 @@ export async function syncStarredRepos(options: SyncStarredReposOptions): Promis
           if (signal?.aborted) {
             throw err;
           }
-          if (err instanceof GeminiQuotaError) {
-            quotaExceeded = true;
-            geminiStatus = 'quota_exceeded';
-            console.warn('[sync] Gemini quota exceeded:', err.message);
+          if (err instanceof LLMAuthError) {
+            invalidKey = true;
+            llmStatus = 'invalid_key';
+            console.warn(`[sync] LLM authentication error for ${provider}:`, err.message);
             return {
               category: 'Other',
               method: 'fallback',
               confidence: 0.5,
             };
           }
-          geminiErrorCount++;
-          console.warn(`[sync] Gemini classification error for ${repo.fullName}:`, err instanceof Error ? err.message : String(err));
+          if (err instanceof LLMRateLimitError || (err instanceof Error && err.name === 'GeminiQuotaError')) {
+            quotaExceeded = true;
+            llmStatus = 'quota_exceeded';
+            console.warn('[sync] LLM rate limit or quota exceeded:', err.message);
+            return {
+              category: 'Other',
+              method: 'fallback',
+              confidence: 0.5,
+            };
+          }
+          llmErrorCount++;
+          console.warn(`[sync] LLM classification error for ${repo.fullName}:`, err instanceof Error ? err.message : String(err));
           return {
             category: 'Other',
             method: 'fallback',
@@ -368,13 +399,15 @@ export async function syncStarredRepos(options: SyncStarredReposOptions): Promis
       }
     );
 
-    if (gemini && gemini.apiKey.trim()) {
-      if (quotaExceeded) {
-        geminiStatus = 'quota_exceeded';
-      } else if (geminiErrorCount > 0) {
-        geminiStatus = 'partial';
+    if (effectiveLlm && effectiveLlm.apiKey.trim()) {
+      if (invalidKey) {
+        llmStatus = 'invalid_key';
+      } else if (quotaExceeded) {
+        llmStatus = 'quota_exceeded';
+      } else if (llmErrorCount > 0) {
+        llmStatus = 'partial';
       } else {
-        geminiStatus = 'ok';
+        llmStatus = 'ok';
       }
     }
 
@@ -401,8 +434,10 @@ export async function syncStarredRepos(options: SyncStarredReposOptions): Promis
         cacheHits,
         newlyClassified,
       },
-      geminiStatus,
-      geminiErrors: geminiErrorCount > 0 ? geminiErrorCount : undefined,
+      llmStatus,
+      llmErrors: llmErrorCount > 0 ? llmErrorCount : undefined,
+      geminiStatus: llmStatus,
+      geminiErrors: llmErrorCount > 0 ? llmErrorCount : undefined,
     };
   } catch (err) {
     throw mapToSyncError(err);

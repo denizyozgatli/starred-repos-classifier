@@ -195,16 +195,16 @@ export default function App() {
           </div>
         )}
 
-        {/* Gemini Quota Exceeded Banner */}
-        {sync.geminiStatus === 'quota_exceeded' && (
+        {/* LLM Quota Exceeded Banner */}
+        {sync.llmStatus === 'quota_exceeded' && (
           <div className="bg-[#161b22] border border-[#d29922]/40 rounded-xl px-4 py-2.5 flex items-center justify-between text-xs text-[#e3b341] animate-in fade-in">
             <div className="flex items-center gap-2">
               <AlertTriangle className="w-4 h-4 shrink-0 text-[#d29922]" aria-hidden="true" />
-              <span>Gemini API quota exceeded; remaining ambiguous repositories were categorized as 'Other'.</span>
+              <span>LLM API quota exceeded; remaining ambiguous repositories were categorized as 'Other'.</span>
             </div>
             <button
               type="button"
-              onClick={sync.clearGeminiNotice}
+              onClick={sync.clearLlmNotice}
               className="text-github-muted hover:text-white p-1 rounded-md transition-colors cursor-pointer"
               aria-label="Dismiss notice"
             >
@@ -213,19 +213,37 @@ export default function App() {
           </div>
         )}
 
-        {/* Gemini Partial Error Banner */}
-        {sync.geminiStatus === 'partial' && (
+        {/* LLM Invalid Key Banner */}
+        {sync.llmStatus === 'invalid_key' && (
+          <div className="bg-[#161b22] border border-[#f85149]/40 rounded-xl px-4 py-2.5 flex items-center justify-between text-xs text-[#ff7b72] animate-in fade-in">
+            <div className="flex items-center gap-2">
+              <AlertTriangle className="w-4 h-4 shrink-0 text-[#f85149]" aria-hidden="true" />
+              <span>LLM authentication failed: invalid API key. Remaining ambiguous repositories were categorized as 'Other'.</span>
+            </div>
+            <button
+              type="button"
+              onClick={sync.clearLlmNotice}
+              className="text-github-muted hover:text-white p-1 rounded-md transition-colors cursor-pointer"
+              aria-label="Dismiss notice"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        )}
+
+        {/* LLM Partial Error Banner */}
+        {sync.llmStatus === 'partial' && (
           <div className="bg-[#161b22] border border-[#d29922]/40 rounded-xl px-4 py-2.5 flex items-center justify-between text-xs text-[#e3b341] animate-in fade-in">
             <div className="flex items-center gap-2">
               <AlertTriangle className="w-4 h-4 shrink-0 text-[#d29922]" aria-hidden="true" />
               <span>
-                Gemini classification succeeded for some repositories, but encountered {sync.geminiErrors ?? 0} error
-                {(sync.geminiErrors ?? 0) === 1 ? '' : 's'}; unmatched repositories were categorized as 'Other'.
+                LLM classification succeeded for some repositories, but encountered {sync.llmErrors ?? 0} error
+                {(sync.llmErrors ?? 0) === 1 ? '' : 's'}; unmatched repositories were categorized as 'Other'.
               </span>
             </div>
             <button
               type="button"
-              onClick={sync.clearGeminiNotice}
+              onClick={sync.clearLlmNotice}
               className="text-github-muted hover:text-white p-1 rounded-md transition-colors cursor-pointer"
               aria-label="Dismiss notice"
             >
@@ -242,7 +260,7 @@ export default function App() {
               <span>
                 Refreshing starred repositories in background…{' '}
                 {sync.phase === 'llm'
-                  ? `Classifying with Gemini ${sync.progress.done} / ${sync.progress.total || '…'}`
+                  ? `Classifying with LLM ${sync.progress.done} / ${sync.progress.total || '…'}`
                   : sync.phase === 'classifying'
                   ? `Classifying ${sync.progress.done} / ${sync.progress.total || '…'}`
                   : `Fetching page ${sync.progress.page ?? 1}`}

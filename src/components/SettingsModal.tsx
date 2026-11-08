@@ -8,7 +8,7 @@ import {
   loadGeminiSettings,
   saveGeminiSettings,
 } from '../lib/storage/settings.ts';
-import { GEMINI_MODEL } from '../core/llm.ts';
+import { PROVIDER_DEFAULTS } from '../core/llm.ts';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -25,10 +25,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   isSyncing = false,
   hasCachedData = false,
 }) => {
+  const defaultModel = PROVIDER_DEFAULTS.google.defaultModel;
   const [apiKey, setApiKey] = useState('');
   const [remember, setRemember] = useState(false);
   const [showKey, setShowKey] = useState(false);
-  const [model, setModel] = useState(GEMINI_MODEL);
+  const [model, setModel] = useState(defaultModel);
   const [intervalSec, setIntervalSec] = useState(4.0);
   const [savedBanner, setSavedBanner] = useState(false);
   const modalRef = useRef<HTMLDivElement>(null);
@@ -39,7 +40,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       setApiKey(loadGeminiKey() || '');
       setRemember(isGeminiKeyRemembered());
       const settings = loadGeminiSettings();
-      setModel(settings.model || GEMINI_MODEL);
+      setModel(settings.model || defaultModel);
       setIntervalSec(settings.intervalSec || 4.0);
       setSavedBanner(false);
     }

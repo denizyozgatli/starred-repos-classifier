@@ -5,6 +5,7 @@ import {
   shouldAutoRefresh,
   type SyncProgress,
   type SyncError,
+  type LLMSyncStatus,
   type GeminiSyncStatus,
   mapToSyncError,
   resolveSyncFailure,
@@ -24,6 +25,8 @@ export interface GitHubSyncState {
   listsUnavailable: boolean;
   isBackgroundRefreshing: boolean;
   tokenExpiredNotice: string | null;
+  llmStatus: LLMSyncStatus;
+  llmErrors?: number;
   geminiStatus: GeminiSyncStatus;
   geminiErrors?: number;
   dataset: DatasetEnvelope | null;
@@ -42,6 +45,7 @@ export interface UseGitHubSyncReturn extends GitHubSyncState {
   disconnect: () => Promise<void>;
   clearError: () => void;
   clearTokenExpiredNotice: () => void;
+  clearLlmNotice: () => void;
   clearGeminiNotice: () => void;
 }
 
@@ -56,8 +60,8 @@ export function useGitHubSync(options: UseGitHubSyncOptions = {}): UseGitHubSync
   const [listsUnavailable, setListsUnavailable] = useState<boolean>(false);
   const [isBackgroundRefreshing, setIsBackgroundRefreshing] = useState<boolean>(false);
   const [tokenExpiredNotice, setTokenExpiredNotice] = useState<string | null>(null);
-  const [geminiStatus, setGeminiStatus] = useState<GeminiSyncStatus>('disabled');
-  const [geminiErrors, setGeminiErrors] = useState<number | undefined>(undefined);
+  const [llmStatus, setLlmStatus] = useState<LLMSyncStatus>('disabled');
+  const [llmErrors, setLlmErrors] = useState<number | undefined>(undefined);
   const [dataset, setDataset] = useState<DatasetEnvelope | null>(null);
 
   const abortControllerRef = useRef<AbortController | null>(null);
@@ -101,6 +105,7 @@ export function useGitHubSync(options: UseGitHubSyncOptions = {}): UseGitHubSync
           token,
           store,
           signal: controller.signal,
+          llm: geminiConfig ? { provider: 'google', ...geminiConfig } : undefined,
           gemini: geminiConfig,
           ignoreOtherCache: syncOpts.ignoreOtherCache,
           onProgress: p => {
@@ -112,8 +117,8 @@ export function useGitHubSync(options: UseGitHubSyncOptions = {}): UseGitHubSync
         setDataset(result.envelope);
         setListsUnavailable(result.listsUnavailable);
         setViewerLogin(result.envelope.username || null);
-        setGeminiStatus(result.geminiStatus);
-        setGeminiErrors(result.geminiErrors);
+        setLlmStatus(result.llmStatus);
+        setLlmErrors(result.llmErrors);
         const nowIso = new Date().toISOString();
         setLastSyncAt(nowIso);
         setStatus('ready');
@@ -287,9 +292,11 @@ export function useGitHubSync(options: UseGitHubSyncOptions = {}): UseGitHubSync
     setTokenExpiredNotice(null);
   }, []);
 
-  const clearGeminiNotice = useCallback((): void => {
-    setGeminiStatus('disabled');
+  const clearLlmNotice = useCallback((): void => {
+    setLlmStatus('disabled');
   }, []);
+
+  const clearGeminiNotice = clearLlmNotice;
 
   return {
     status,
@@ -301,8 +308,10 @@ export function useGitHubSync(options: UseGitHubSyncOptions = {}): UseGitHubSync
     listsUnavailable,
     isBackgroundRefreshing,
     tokenExpiredNotice,
-    geminiStatus,
-    geminiErrors,
+    llmStatus,
+    llmErrors,
+    geminiStatus: llmStatus,
+    geminiErrors: llmErrors,
     dataset,
     connect,
     refresh,
@@ -311,6 +320,7 @@ export function useGitHubSync(options: UseGitHubSyncOptions = {}): UseGitHubSync
     disconnect,
     clearError,
     clearTokenExpiredNotice,
+    clearLlmNotice,
     clearGeminiNotice,
   };
 }

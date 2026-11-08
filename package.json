@@ -46,7 +46,6 @@
     "evaluate:unseen": "tsx scripts/evaluate-unseen.ts"
   },
   "dependencies": {
-    "@google/genai": "^3.0.0",
     "dotenv": "^16.4.7"
   },
   "devDependencies": {

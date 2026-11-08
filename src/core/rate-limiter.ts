@@ -132,6 +132,12 @@ function getErrorDetails(error: unknown): { status?: number; text: string } {
 
 export function extractRetryDelayMs(error: unknown): number | null {
   if (!error) return null;
+  if (typeof error === 'object' && error !== null && 'retryAfterSec' in error) {
+    const sec = (error as { retryAfterSec?: unknown }).retryAfterSec;
+    if (typeof sec === 'number' && sec > 0) {
+      return Math.min(Math.ceil(sec * 1000), 60000);
+    }
+  }
   const { text } = getErrorDetails(error);
   // Match retryDelay: "42s" or "42.5s"
   const jsonMatch = text.match(/"retryDelay":\s*"(\d+(?:\.\d+)?)s"/i);
@@ -158,6 +164,7 @@ export function isQuotaExceededError(error: unknown): boolean {
   const { status, text } = getErrorDetails(error);
   const upper = text.toUpperCase();
   return (
+    upper.includes('INSUFFICIENT_QUOTA') ||
     upper.includes('RESOURCE_EXHAUSTED') ||
     upper.includes('QUOTA EXCEEDED') ||
     upper.includes('QUOTA_EXCEEDED') ||
@@ -167,6 +174,9 @@ export function isQuotaExceededError(error: unknown): boolean {
 
 export function isRateLimitError(error: unknown): boolean {
   if (!error) return false;
+  if (typeof error === 'object' && error !== null && (error as { name?: string }).name === 'LLMRateLimitError') {
+    return true;
+  }
   const { status, text } = getErrorDetails(error);
   if (status === 429) return true;
   const upper = text.toUpperCase();
