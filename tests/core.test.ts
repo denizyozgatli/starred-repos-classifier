@@ -252,6 +252,48 @@ describe('Shared Core - GitHub Endpoint Selection & Authentication', () => {
     expect(authHeader).toBe('Bearer secret_token');
     expect(apiVersionHeader).toBe('2022-11-28');
   });
+
+  it('omits User-Agent by default and includes it when userAgent option is provided', async () => {
+    let capturedHeaders: Headers | undefined;
+    const getHeader = (name: string) => capturedHeaders?.get(name) ?? null;
+
+    globalThis.fetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      capturedHeaders = new Headers(init?.headers);
+      return new Response(JSON.stringify({ login: 'octocat' }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    });
+
+    // Default: no User-Agent
+    await getAuthenticatedUser('token123');
+    expect(getHeader('user-agent')).toBeNull();
+
+    // With userAgent option
+    await getAuthenticatedUser('token123', { userAgent: 'CustomApp/2.0' });
+    expect(getHeader('user-agent')).toBe('CustomApp/2.0');
+  });
+
+  it('fetchStarredRepos omits User-Agent by default and includes it when userAgent is passed', async () => {
+    let capturedHeaders: Headers | undefined;
+    const getHeader = (name: string) => capturedHeaders?.get(name) ?? null;
+
+    globalThis.fetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      capturedHeaders = new Headers(init?.headers);
+      return new Response(JSON.stringify([]), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    });
+
+    // Default: no User-Agent
+    await fetchStarredRepos({ token: 'token123', username: 'testuser' });
+    expect(getHeader('user-agent')).toBeNull();
+
+    // With userAgent
+    await fetchStarredRepos({ token: 'token123', username: 'testuser', userAgent: 'Starred-Repos-Classifier/1.0' });
+    expect(getHeader('user-agent')).toBe('Starred-Repos-Classifier/1.0');
+  });
 });
 
 describe('Shared Core - Star Lists Query Selection', () => {
@@ -326,5 +368,36 @@ describe('Shared Core - Star Lists Query Selection', () => {
     expect(capturedBody!.query).toContain('user(login: $login)');
     expect(capturedBody!.query).not.toContain('viewer {');
     expect(capturedBody!.variables).toEqual({ login: 'targetuser', cursor: null });
+  });
+
+  it('fetchUserStarLists omits User-Agent by default and includes it when userAgent option is supplied', async () => {
+    let capturedHeaders: Headers | undefined;
+    const getHeader = (name: string) => capturedHeaders?.get(name) ?? null;
+
+    globalThis.fetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      capturedHeaders = new Headers(init?.headers);
+      return new Response(JSON.stringify({
+        data: {
+          viewer: {
+            lists: {
+              pageInfo: { hasNextPage: false, endCursor: null },
+              totalCount: 0,
+              nodes: [],
+            },
+          },
+        },
+      }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    });
+
+    // Default: no User-Agent
+    await fetchUserStarLists({ token: 'ghp_token', isViewer: true });
+    expect(getHeader('user-agent')).toBeNull();
+
+    // With userAgent
+    await fetchUserStarLists({ token: 'ghp_token', isViewer: true, userAgent: 'Starred-Repos-Classifier/1.0' });
+    expect(getHeader('user-agent')).toBe('Starred-Repos-Classifier/1.0');
   });
 });

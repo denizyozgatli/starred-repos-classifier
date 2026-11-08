@@ -7,10 +7,11 @@ export interface StarListsLogger {
 export interface FetchStarListsOptions {
   token?: string;
   username?: string;
-  isViewer: boolean;
+  isViewer?: boolean;
   signal?: AbortSignal;
   logger?: StarListsLogger;
   throwOnError?: boolean;
+  userAgent?: string;
 }
 
 interface GraphQLPageInfo {
@@ -156,7 +157,8 @@ async function executeGraphQL<T>(
   token: string,
   query: string,
   variables: Record<string, unknown> = {},
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  userAgent?: string
 ): Promise<T> {
   const headers: Record<string, string> = {
     Accept: 'application/vnd.github.v3+json',
@@ -164,8 +166,8 @@ async function executeGraphQL<T>(
     'Content-Type': 'application/json',
     'X-GitHub-Api-Version': '2022-11-28',
   };
-  if (typeof window === 'undefined') {
-    headers['User-Agent'] = 'Starred-Repos-Classifier/1.0';
+  if (userAgent && userAgent.trim()) {
+    headers['User-Agent'] = userAgent.trim();
   }
 
   const response = await fetch(GRAPHQL_ENDPOINT, {
@@ -187,42 +189,16 @@ async function executeGraphQL<T>(
  * When isViewer is true, uses the VIEWER query to retrieve all star lists (including private lists).
  * When isViewer is false, uses the USER query with username.
  */
-export function fetchUserStarLists(options: FetchStarListsOptions): Promise<Map<string, string[]>>;
-export function fetchUserStarLists(
-  token: string | undefined,
-  username: string | undefined,
-  isViewer: boolean,
-  signal?: AbortSignal,
-  logger?: StarListsLogger
-): Promise<Map<string, string[]>>;
-export async function fetchUserStarLists(
-  optionsOrToken?: FetchStarListsOptions | string,
-  usernameParam?: string,
-  isViewerParam?: boolean,
-  signalParam?: AbortSignal,
-  loggerParam?: StarListsLogger
-): Promise<Map<string, string[]>> {
-  let token: string | undefined;
-  let username: string | undefined;
-  let isViewer = false;
-  let signal: AbortSignal | undefined;
-  let logger: StarListsLogger | undefined;
-  let throwOnError = false;
-
-  if (typeof optionsOrToken === 'object' && optionsOrToken !== null) {
-    token = optionsOrToken.token;
-    username = optionsOrToken.username;
-    isViewer = Boolean(optionsOrToken.isViewer);
-    signal = optionsOrToken.signal;
-    logger = optionsOrToken.logger;
-    throwOnError = Boolean(optionsOrToken.throwOnError);
-  } else {
-    token = optionsOrToken;
-    username = usernameParam;
-    isViewer = Boolean(isViewerParam);
-    signal = signalParam;
-    logger = loggerParam;
-  }
+export async function fetchUserStarLists(options: FetchStarListsOptions = {}): Promise<Map<string, string[]>> {
+  const {
+    token,
+    username,
+    isViewer = false,
+    signal,
+    logger,
+    throwOnError = false,
+    userAgent,
+  } = options;
 
   const log = logger?.log ?? (() => {});
   const warn = logger?.warn ?? (() => {});
@@ -242,7 +218,7 @@ export async function fetchUserStarLists(
       const query = isViewer ? VIEWER_LISTS_QUERY : USER_LISTS_QUERY;
       const variables: Record<string, unknown> = isViewer ? { cursor } : { login: username, cursor };
 
-      const res = await executeGraphQL<GraphQLUserListsResponse>(token, query, variables, signal);
+      const res = await executeGraphQL<GraphQLUserListsResponse>(token, query, variables, signal, userAgent);
 
       if (res.errors && res.errors.length > 0) {
         const errorMsg = res.errors.map((e: { message: string }) => e.message).join('; ');
@@ -291,10 +267,16 @@ export async function fetchUserStarLists(
 
       while (itemsHasNext && itemsCursor) {
         try {
-          const itemsRes = await executeGraphQL<GraphQLListItemsResponse>(token, LIST_ITEMS_QUERY, {
-            listId: list.id,
-            cursor: itemsCursor,
-          }, signal);
+          const itemsRes = await executeGraphQL<GraphQLListItemsResponse>(
+            token,
+            LIST_ITEMS_QUERY,
+            {
+              listId: list.id,
+              cursor: itemsCursor,
+            },
+            signal,
+            userAgent
+          );
 
           const nodeItems = itemsRes.data?.node?.items;
           if (Array.isArray(nodeItems?.nodes)) {

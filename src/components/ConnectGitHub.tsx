@@ -21,6 +21,7 @@ interface ConnectGitHubProps {
   progress?: SyncProgress;
   error?: string | null;
   onClearError?: () => void;
+  hasLoadedDataset?: boolean;
 }
 
 export const ConnectGitHub: React.FC<ConnectGitHubProps> = ({
@@ -32,6 +33,7 @@ export const ConnectGitHub: React.FC<ConnectGitHubProps> = ({
   progress,
   error,
   onClearError,
+  hasLoadedDataset = false,
 }) => {
   const [token, setToken] = useState('');
   const [showToken, setShowToken] = useState(false);
@@ -132,18 +134,31 @@ export const ConnectGitHub: React.FC<ConnectGitHubProps> = ({
     <div className="max-w-2xl mx-auto my-8 sm:my-12 space-y-6">
       <div className="bg-[#161b22] border border-[#30363d] rounded-2xl p-6 sm:p-8 shadow-xl space-y-6">
         {/* Header */}
-        <div className="flex items-start gap-4">
-          <div className="w-12 h-12 rounded-xl bg-[#238636]/15 border border-[#238636]/30 flex items-center justify-center text-[#3fb950] shrink-0 mt-0.5">
-            <KeyRound className="w-6 h-6" aria-hidden="true" />
+        <div className="flex items-start justify-between gap-4">
+          <div className="flex items-start gap-4">
+            <div className="w-12 h-12 rounded-xl bg-[#238636]/15 border border-[#238636]/30 flex items-center justify-center text-[#3fb950] shrink-0 mt-0.5">
+              <KeyRound className="w-6 h-6" aria-hidden="true" />
+            </div>
+            <div className="space-y-1">
+              <h2 className="text-lg sm:text-xl font-bold text-white tracking-tight leading-snug">
+                Connect your GitHub account
+              </h2>
+              <p className="text-xs sm:text-sm text-github-muted leading-relaxed">
+                Fetch, classify, and organize your starred repositories directly in your browser. No server, no account creation, and zero telemetry.
+              </p>
+            </div>
           </div>
-          <div className="space-y-1">
-            <h2 className="text-lg sm:text-xl font-bold text-white tracking-tight leading-snug">
-              Connect your GitHub account
-            </h2>
-            <p className="text-xs sm:text-sm text-github-muted leading-relaxed">
-              Fetch, classify, and organize your starred repositories directly in your browser. No server, no account creation, and zero telemetry.
-            </p>
-          </div>
+          {hasLoadedDataset && onCancel && (
+            <button
+              type="button"
+              onClick={onCancel}
+              className="text-github-muted hover:text-white p-1.5 rounded-lg border border-[#30363d] bg-[#21262d] hover:bg-[#30363d] transition-colors shrink-0 cursor-pointer"
+              aria-label="Back to repositories"
+              title="Back to repositories"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          )}
         </div>
 
         {/* Inline Error Area */}
@@ -222,20 +237,32 @@ export const ConnectGitHub: React.FC<ConnectGitHubProps> = ({
 
           {/* Action Row */}
           <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 pt-2">
-            <button
-              type="submit"
-              disabled={!token.trim() || submitting}
-              className="inline-flex items-center justify-center gap-2 px-5 py-2.5 bg-[#238636] hover:bg-[#2ea043] disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-xl text-xs sm:text-sm font-semibold focus-visible:ring-2 focus-visible:ring-[#58a6ff] focus-visible:outline-none transition-colors cursor-pointer shadow-sm"
-            >
-              {submitting ? (
-                <>
-                  <Loader2 className="w-4 h-4 animate-spin" aria-hidden="true" />
-                  <span>Connecting…</span>
-                </>
-              ) : (
-                <span>Connect GitHub</span>
+            <div className="flex flex-wrap items-center gap-2.5">
+              <button
+                type="submit"
+                disabled={!token.trim() || submitting}
+                className="inline-flex items-center justify-center gap-2 px-5 py-2.5 bg-[#238636] hover:bg-[#2ea043] disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-xl text-xs sm:text-sm font-semibold focus-visible:ring-2 focus-visible:ring-[#58a6ff] focus-visible:outline-none transition-colors cursor-pointer shadow-sm"
+              >
+                {submitting ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" aria-hidden="true" />
+                    <span>Connecting…</span>
+                  </>
+                ) : (
+                  <span>Connect GitHub</span>
+                )}
+              </button>
+
+              {hasLoadedDataset && onCancel && (
+                <button
+                  type="button"
+                  onClick={onCancel}
+                  className="inline-flex items-center justify-center px-4 py-2.5 bg-[#21262d] hover:bg-[#30363d] text-white border border-[#30363d] rounded-xl text-xs sm:text-sm font-medium focus-visible:ring-2 focus-visible:ring-[#58a6ff] focus-visible:outline-none transition-colors cursor-pointer"
+                >
+                  Back to repositories
+                </button>
               )}
-            </button>
+            </div>
 
             <button
               type="button"

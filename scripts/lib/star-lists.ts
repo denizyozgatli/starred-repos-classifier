@@ -30,5 +30,6 @@ export async function fetchUserStarLists(options: StarListOptions = {}): Promise
     isViewer,
     signal: options.signal,
     logger: options.logger || console,
+    userAgent: 'Starred-Repos-Classifier/1.0',
   });
 }

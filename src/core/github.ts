@@ -15,6 +15,7 @@ export interface FetchStarredReposOptions {
   perPage?: number;
   maxPages?: number;
   tokenOwnerLogin?: string;
+  userAgent?: string;
 }
 
 export class GitHubApiError extends Error {
@@ -42,13 +43,13 @@ export class GitHubApiError extends Error {
   }
 }
 
-function getGitHubHeaders(token?: string): Record<string, string> {
+function getGitHubHeaders(token?: string, userAgent?: string): Record<string, string> {
   const headers: Record<string, string> = {
     Accept: 'application/vnd.github.v3+json',
     'X-GitHub-Api-Version': '2022-11-28',
   };
-  if (typeof window === 'undefined') {
-    headers['User-Agent'] = 'Starred-Repos-Classifier/1.0';
+  if (userAgent && userAgent.trim()) {
+    headers['User-Agent'] = userAgent.trim();
   }
   if (token) {
     headers['Authorization'] = `Bearer ${token}`;
@@ -128,14 +129,34 @@ async function handleGitHubErrors(response: Response, username?: string): Promis
   }
 }
 
+export interface GetAuthenticatedUserOptions {
+  signal?: AbortSignal;
+  userAgent?: string;
+}
+
 /**
  * Retrieves the profile of the authenticated user using GET /user.
  */
 export async function getAuthenticatedUser(
   token: string,
-  signal?: AbortSignal
+  optionsOrSignal?: AbortSignal | GetAuthenticatedUserOptions,
+  userAgentParam?: string
 ): Promise<AuthenticatedUser> {
-  const headers = getGitHubHeaders(token);
+  let signal: AbortSignal | undefined;
+  let userAgent: string | undefined = userAgentParam;
+
+  if (optionsOrSignal) {
+    if (typeof optionsOrSignal === 'object' && 'aborted' in optionsOrSignal) {
+      signal = optionsOrSignal as AbortSignal;
+    } else {
+      signal = (optionsOrSignal as GetAuthenticatedUserOptions).signal;
+      if ((optionsOrSignal as GetAuthenticatedUserOptions).userAgent) {
+        userAgent = (optionsOrSignal as GetAuthenticatedUserOptions).userAgent;
+      }
+    }
+  }
+
+  const headers = getGitHubHeaders(token, userAgent);
   let response: Response;
   try {
     response = await fetch('https://api.github.com/user', { headers, signal });
@@ -166,7 +187,7 @@ export async function getAuthenticatedUser(
  * - If username is provided for a different user or no token exists, uses GET /users/{username}/starred
  */
 export async function fetchStarredRepos(options: FetchStarredReposOptions = {}): Promise<NormalizedRepo[]> {
-  const { token, username, signal } = options;
+  const { token, username, signal, userAgent } = options;
   const onPage = options.onPage || options.onPageFetched;
   const perPage = options.perPage ?? 100;
   const maxPages = options.maxPages ?? Infinity;
@@ -183,7 +204,7 @@ export async function fetchStarredRepos(options: FetchStarredReposOptions = {}):
       isViewer = username.toLowerCase() === options.tokenOwnerLogin.toLowerCase();
     } else {
       try {
-        const authUser = await getAuthenticatedUser(token, signal);
+        const authUser = await getAuthenticatedUser(token, { signal, userAgent });
         if (authUser.login && authUser.login.toLowerCase() === username.toLowerCase()) {
           isViewer = true;
         }
@@ -205,7 +226,7 @@ export async function fetchStarredRepos(options: FetchStarredReposOptions = {}):
       ? `https://api.github.com/user/starred?per_page=${perPage}&page=${page}`
       : `https://api.github.com/users/${encodeURIComponent(username!)}/starred?per_page=${perPage}&page=${page}`;
 
-    const headers = getGitHubHeaders(token);
+    const headers = getGitHubHeaders(token, userAgent);
 
     let response: Response;
     try {

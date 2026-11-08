@@ -64,10 +64,12 @@ export async function executeDatasetPipeline(options: PipelineOptions): Promise<
   let ownerLogin: string | undefined;
   if (token) {
     try {
-      const authUser = await getAuthenticatedUser(token);
+      const authUser = await getAuthenticatedUser(token, { userAgent: 'Starred-Repos-Classifier/1.0' });
       ownerLogin = authUser.login;
-    } catch {
-      // Non-fatal if /user fails
+    } catch (err) {
+      logger.warn(
+        `[pipeline] Could not resolve authenticated user, falling back to requested username: ${err instanceof Error ? err.message : err}`
+      );
     }
   }
 

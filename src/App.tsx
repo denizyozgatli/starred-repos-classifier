@@ -28,6 +28,7 @@ export default function App() {
   const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
   const [hasGeminiKey, setHasGeminiKey] = useState<boolean>(() => Boolean(loadGeminiKey()));
   const [dismissedListsNotice, setDismissedListsNotice] = useState(false);
+  const [showConnectScreen, setShowConnectScreen] = useState(false);
 
   const isImported = importedFileName !== null && importedRepos !== null;
   const repos = isImported ? (importedRepos ?? []) : (sync.dataset ? sync.dataset.repos : []);
@@ -186,7 +187,7 @@ export default function App() {
             </div>
             <button
               type="button"
-              onClick={() => sync.disconnect()}
+              onClick={() => setShowConnectScreen(true)}
               className="text-xs font-semibold text-white bg-[#21262d] hover:bg-[#30363d] border border-[#30363d] px-2.5 py-1 rounded-md transition-colors cursor-pointer"
             >
               Reconnect
@@ -275,16 +276,29 @@ export default function App() {
           </div>
         )}
 
-        {!hasLoadedDataset ? (
+        {!hasLoadedDataset || showConnectScreen ? (
           <ConnectGitHub
             isSyncing={sync.status === 'syncing'}
             phase={sync.phase}
             progress={sync.progress}
             error={sync.error?.message}
             onClearError={sync.clearError}
-            onConnect={sync.connect}
-            onCancel={sync.cancel}
-            onOpenImport={() => setIsImportModalOpen(true)}
+            onConnect={async (token, remember) => {
+              const ok = await sync.connect(token, remember);
+              if (ok) {
+                setShowConnectScreen(false);
+              }
+              return ok;
+            }}
+            onCancel={() => {
+              setShowConnectScreen(false);
+              sync.cancel();
+            }}
+            onOpenImport={() => {
+              setShowConnectScreen(false);
+              setIsImportModalOpen(true);
+            }}
+            hasLoadedDataset={hasLoadedDataset}
           />
         ) : (
           <>
@@ -322,7 +336,7 @@ export default function App() {
                 <EmptyState
                   type="empty"
                   onOpenImport={() => setIsImportModalOpen(true)}
-                  onConnect={() => sync.disconnect()}
+                  onConnect={() => setShowConnectScreen(true)}
                 />
               ) : filteredAndSortedRepos.length === 0 ? (
                 <EmptyState

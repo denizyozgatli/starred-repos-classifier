@@ -64,7 +64,7 @@ export async function resolveActiveUsername(options: { token?: string; username?
   if (!token) return undefined;
 
   try {
-    const user = await getAuthenticatedUser(token);
+    const user = await getAuthenticatedUser(token, { userAgent: 'Starred-Repos-Classifier/1.0' });
     return user.login;
   } catch {
     return undefined;
@@ -83,6 +83,7 @@ export async function fetchAllStarredRepos(options: FetchOptions = {}): Promise<
     ...options,
     username,
     token,
+    userAgent: 'Starred-Repos-Classifier/1.0',
     onPage: options.onPage || options.onPageFetched,
   });
 }

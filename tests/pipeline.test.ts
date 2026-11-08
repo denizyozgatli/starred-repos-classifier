@@ -12,6 +12,7 @@ import { atomicWriteJson, withDatasetSafety } from '../scripts/lib/storage.ts';
 import { runClassification } from '../scripts/classify.ts';
 import { mergeStarLists } from '../scripts/lib/star-lists.ts';
 import { extractRepos } from '../src/core/dataset.ts';
+import { executeDatasetPipeline } from '../scripts/lib/pipeline.ts';
 import type { Repository } from '../src/types/repo.ts';
 
 describe('Data Pipeline', () => {
@@ -1327,6 +1328,75 @@ describe('Data Pipeline', () => {
       expect(extractRetryDelayMs(new Error('{"retryDelay":"12s"}'))).toBe(13000);
       expect(extractRetryDelayMs(new Error('Please retry in 5.5s.'))).toBe(6500);
       expect(extractRetryDelayMs(new Error('Generic failure'))).toBeNull();
+    });
+
+    it('logs warning when /user resolution fails and falls back to requested username', async () => {
+      const originalFetch = globalThis.fetch;
+      const warnSpy = vi.fn();
+      const testOut = resolve(process.cwd(), 'data', 'test-pipeline-warn-out.json');
+
+      try {
+        globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
+          const url = String(input);
+          if (url.includes('api.github.com/user') && !url.includes('/users/')) {
+            throw new Error('Bad credentials');
+          }
+          if (url.includes('/users/fallbackuser/starred')) {
+            return new Response(JSON.stringify([]), {
+              status: 200,
+              headers: { 'Content-Type': 'application/json' },
+            });
+          }
+          if (url.includes('api.github.com/graphql')) {
+            return new Response(
+              JSON.stringify({
+                data: {
+                  user: {
+                    lists: {
+                      pageInfo: { hasNextPage: false, endCursor: null },
+                      totalCount: 0,
+                      nodes: [],
+                    },
+                  },
+                },
+              }),
+              {
+                status: 200,
+                headers: { 'Content-Type': 'application/json' },
+              }
+            );
+          }
+          return new Response(JSON.stringify([]), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          });
+        });
+
+        await executeDatasetPipeline({
+          username: 'fallbackuser',
+          token: 'invalid-token',
+          ruleOnly: true,
+          outputPath: testOut,
+          noCache: true,
+          logger: {
+            log: vi.fn(),
+            warn: warnSpy,
+            error: vi.fn(),
+          },
+        });
+
+        expect(warnSpy).toHaveBeenCalledWith(
+          expect.stringContaining('[pipeline] Could not resolve authenticated user, falling back to requested username:')
+        );
+        expect(warnSpy).toHaveBeenCalledWith(
+          expect.stringContaining('Bad credentials')
+        );
+      } finally {
+        globalThis.fetch = originalFetch;
+        if (existsSync(testOut)) {
+          unlinkSync(testOut);
+        }
+      }
     });
   });
 });
