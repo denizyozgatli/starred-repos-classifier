@@ -15,7 +15,7 @@ GitHub's default star list quickly becomes unmanageable as stars accumulate over
 
 - **Privacy-First & Local**: No central backend, no tracking, and no server-side database. Your token and stars stay in your browser.
 - **Direct Browser Connection**: The web dashboard connects directly to `api.github.com` via CORS using your personal access token; local JSON import remains available as a fallback.
-- **Hybrid Classification**: Fast, deterministic rules categorize repositories instantly, with optional in-browser Google Gemini LLM fallback for ambiguous entries.
+- **Hybrid Classification**: Fast, deterministic rules categorize repositories instantly, with optional in-browser multi-provider LLM fallback (OpenAI, Anthropic Claude, Google Gemini, DeepSeek) for ambiguous entries.
 - **Offline & Cached**: Starred repositories and classifications are cached locally in browser IndexedDB with automatic background refresh (6-hour window).
 - **Static & Portable**: The dashboard compiles to pure static assets deployable to GitHub Pages, Vercel, Netlify, or any static host.
 - **Open Source**: MIT licensed and easy to run locally or self-host.
@@ -63,18 +63,27 @@ To read your starred repositories directly from the browser, create a fine-grain
 - **"The token page always shows 'Public repositories (read-only)'."** — That line is permanent: every fine-grained token can always read public repositories. It does not mean your "All repositories" selection was reset — open the token, click Edit, and check the Repository access radio to verify.
 - **"Some private repositories are still missing."** — Repositories owned by an organization appear only if that organization allows fine-grained personal access tokens (org policy). A classic token (`ghp_`) with the `repo` scope is an alternative.
 
-### Optional: Gemini AI Classification
+### Optional: AI Classification
 
-The classifier uses deterministic rules by default (zero external API keys required). If you want Gemini to automatically categorize ambiguous repositories that rules cannot resolve:
+The classifier uses deterministic rules by default (zero external API keys required). The rule engine is always the default and the LLM only fills rule gaps. Removing the key or an expired/invalid key never changes existing categories.
+
+If you want an AI model to automatically categorize ambiguous repositories that rules cannot resolve:
 
 1. Click the **Settings** (gear icon) button in the dashboard header.
-2. Enter your Google Gemini API key.
-3. Choose whether to remember the key on this device, select your preferred model (`gemini-3.8-flash` recommended), and adjust rate limiting if desired.
-4. Click **Re-classify 'Other' repos** to run Gemini against repositories currently categorized as `Other`.
+2. Select your AI provider and enter your API key.
+3. Choose whether to remember the key on this device, select your preferred model, and adjust rate limiting if desired.
+4. Click **Re-classify 'Other' repos** to run AI classification against repositories currently categorized as `Other`.
+
+| Provider | Where to get a key | Notes |
+|---|---|---|
+| **Google Gemini** | [Google AI Studio](https://aistudio.google.com/) | Direct browser calls to Google's API. Default model: `gemini-3.8-flash`, default delay: 4s. Restrict the key by HTTP referrer where supported (Google AI Studio / Cloud Console). |
+| **OpenAI** | [OpenAI Platform](https://platform.openai.com/api-keys) | Direct browser calls to OpenAI's API. Default model: `gpt-6-luna`, default delay: 1s. Restrict the key by HTTP referrer where supported. |
+| **Anthropic (Claude)** | [Anthropic Console](https://console.anthropic.com/) | Direct browser calls to Anthropic's API. Default model: `claude-sonnet-5-5`, default delay: 1s. Anthropic requires the direct-browser-access header (`anthropic-dangerous-direct-browser-access`), which is automatically handled by the app. |
+| **DeepSeek** | [DeepSeek Platform](https://platform.deepseek.com/) | Direct browser calls to DeepSeek's API. Default model: `deepseek-chat`, default delay: 1s. DeepSeek keys start with `sk-` like OpenAI's, so the app asks you to pick the provider if ambiguous. |
 
 > **API Key Privacy & Security**:
-> - Like the GitHub token, your Gemini API key is stored only in your browser (`sessionStorage` or `localStorage`) and sent directly to Google's Gemini API (`generativelanguage.googleapis.com`).
-> - We recommend creating a restricted API key in Google AI Studio and restricting it by HTTP referrer when self-hosting.
+> - Like the GitHub token, your AI API key is stored only in your browser (`sessionStorage` by default, or `localStorage` when "Remember on this device" is checked) and sent directly from your browser to the chosen provider's official API origin.
+> - The application never logs API keys or sends them to any intermediate server.
 
 ## CLI
 
@@ -117,7 +126,7 @@ The generated JSON dataset can be loaded into the dashboard at any time via the 
 Each repository is assigned to one category:
 
 1. **Deterministic rules** — analyzes repository name, topics, description, and language.
-2. **Optional Gemini fallback** — ambiguous repositories can be classified with Gemini.
+2. **Optional AI fallback** — ambiguous repositories can be classified with OpenAI, Anthropic Claude, Google Gemini, or DeepSeek.
 3. **Safe default** — repositories that cannot be confidently classified are assigned to `Other`.
 
 ### Supported Categories
@@ -152,8 +161,8 @@ The web dashboard is an interactive client-side catalog:
 │                                                               ▼             │
 │                                                     src/core/ Classifier    │
 │                                                     ├── Deterministic Rules │
-│  Gemini API Key ──► Google Gemini API (optional) ──►└── Gemini Fallback     │
-│  (UI / Storage)    (generativelanguage.googleapis)            │             │
+│  LLM API Key ───► AI Provider API (optional) ───────►└── AI Fallback        │
+│  (UI / Storage)   (OpenAI/Anthropic/Google/DeepSeek)          │             │
 │                                                               ▼             │
 │                                                     IndexedDB Store & Cache │
 │                                                               │             │

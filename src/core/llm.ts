@@ -34,11 +34,11 @@ export const PROVIDER_DEFAULTS: Record<
   { defaultModel: string; defaultIntervalSec: number }
 > = {
   openai: {
-    defaultModel: 'gpt-4o-mini',
+    defaultModel: 'gpt-6-luna',
     defaultIntervalSec: 1,
   },
   anthropic: {
-    defaultModel: 'claude-3-5-sonnet-20241022',
+    defaultModel: 'claude-sonnet-5-5',
     defaultIntervalSec: 1,
   },
   google: {

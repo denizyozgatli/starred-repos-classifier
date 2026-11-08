@@ -1,3 +1,5 @@
+import React from 'react';
+import { renderToString } from 'react-dom/server';
 import { describe, it, expect } from 'vitest';
 import { CURRENT_SCHEMA_VERSION, type Repository, type DatasetEnvelope } from '../src/types/repo.ts';
 import { searchRepositories } from '../src/lib/search.ts';
@@ -6,6 +8,7 @@ import { sortRepositories } from '../src/lib/sorting.ts';
 import { stateToQueryString, readStateFromUrl, type DashboardState } from '../src/lib/urlState.ts';
 import { parseAndValidateDataset, validateDataset } from '../src/lib/datasetValidation.ts';
 import { validateRepos } from '../scripts/lib/validator.ts';
+import { SettingsModal } from '../src/components/SettingsModal.tsx';
 
 const SAMPLE_REPOS: Repository[] = [
   {
@@ -895,6 +898,36 @@ describe('Frontend Logic', () => {
       expect(result.valid).toBe(true);
       expect(result.data).toEqual([]);
       expect(result.metadata?.username).toBe('newbie-coder');
+    });
+  });
+
+  describe('SettingsModal Controls & Multi-Provider UI', () => {
+    it('renders provider selection buttons for all 4 providers', () => {
+      const html = renderToString(
+        React.createElement(SettingsModal, {
+          isOpen: true,
+          onClose: () => {},
+          hasCachedData: true,
+        })
+      );
+      expect(html).toContain('OpenAI');
+      expect(html).toContain('Anthropic (Claude)');
+      expect(html).toContain('Google Gemini');
+      expect(html).toContain('DeepSeek');
+    });
+
+    it('renders auto interval checkbox with recommended delay note and manual model entry affordance', () => {
+      const html = renderToString(
+        React.createElement(SettingsModal, {
+          isOpen: true,
+          onClose: () => {},
+          hasCachedData: true,
+        })
+      );
+      expect(html).toContain('Auto (recommended)');
+      expect(html).toContain("Auto uses the provider&#x27;s recommended delay");
+      expect(html).toContain('Enter manually');
+      expect(html).toContain('AI Classification Settings');
     });
   });
 });

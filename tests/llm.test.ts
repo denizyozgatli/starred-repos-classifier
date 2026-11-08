@@ -22,6 +22,11 @@ import {
   isGeminiKeyRemembered,
   saveGeminiSettings,
   loadGeminiSettings,
+  loadLlmSettings,
+  saveLlmSettings,
+  clearLlmKey,
+  detectProvider,
+  createDefaultLlmSettings,
 } from '../src/lib/storage/settings.ts';
 import { MemoryStore } from '../src/lib/storage/datasetStore.ts';
 import { syncStarredRepos } from '../src/lib/sync.ts';
@@ -54,8 +59,8 @@ describe('LLM & Multi-Provider Core (src/core/llm.ts & src/core/llm-providers.ts
     it('configures default provider as google and exports provider defaults', () => {
       expect(DEFAULT_LLM_PROVIDER).toBe('google');
       expect(PROVIDER_DEFAULTS.google.defaultModel).toBe('gemini-3.8-flash');
-      expect(PROVIDER_DEFAULTS.openai.defaultModel).toBe('gpt-4o-mini');
-      expect(PROVIDER_DEFAULTS.anthropic.defaultModel).toBe('claude-3-5-sonnet-20241022');
+      expect(PROVIDER_DEFAULTS.openai.defaultModel).toBe('gpt-6-luna');
+      expect(PROVIDER_DEFAULTS.anthropic.defaultModel).toBe('claude-sonnet-5-5');
       expect(PROVIDER_DEFAULTS.deepseek.defaultModel).toBe('deepseek-chat');
     });
 
@@ -305,6 +310,39 @@ describe('LLM & Multi-Provider Core (src/core/llm.ts & src/core/llm-providers.ts
       expect(requestedHeaders?.get('content-type')).toBe('application/json');
       expect(requestedBody?.model).toBe('gpt-4o-mini');
       expect(requestedBody?.response_format).toEqual({ type: 'json_object' });
+      expect(requestedBody?.reasoning_effort).toBeUndefined();
+    });
+
+    it('openai: adds reasoning_effort: "none" only when model starts with gpt-6', async () => {
+      let requestedBody: Record<string, unknown> | undefined;
+
+      globalThis.fetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+        requestedBody = JSON.parse(String(init?.body));
+        return new Response(
+          JSON.stringify({
+            choices: [
+              {
+                message: {
+                  content: JSON.stringify({ category: 'ML / AI', confidence: 0.99 }),
+                },
+              },
+            ],
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } }
+        );
+      });
+
+      const classifier = createLLMClassifier({
+        provider: 'openai',
+        apiKey: 'sk-test-secret',
+        model: 'gpt-6-luna',
+        minIntervalMs: 0,
+      });
+
+      const result = await classifier(sampleRepo);
+      expect(result.category).toBe('ML / AI');
+      expect(requestedBody?.model).toBe('gpt-6-luna');
+      expect(requestedBody?.reasoning_effort).toBe('none');
     });
 
     it('openai: retries once without response_format if 400 mentions response_format', async () => {
@@ -582,34 +620,143 @@ describe('LLM & Multi-Provider Core (src/core/llm.ts & src/core/llm-providers.ts
       vi.unstubAllGlobals();
     });
 
-    it('saves Gemini key to sessionStorage by default', () => {
-      saveGeminiKey('AIzaSyDefault', false);
-      expect(mockSession.getItem('starred_repos_gemini_key')).toBe('AIzaSyDefault');
-      expect(mockLocal.getItem('starred_repos_gemini_key')).toBeNull();
-      expect(loadGeminiKey()).toBe('AIzaSyDefault');
-      expect(isGeminiKeyRemembered()).toBe(false);
+    describe('detectProvider', () => {
+      it('detects google from AIza prefix', () => {
+        expect(detectProvider('AIzaSyD-1234567890abcdef')).toBe('google');
+      });
+
+      it('detects anthropic from sk-ant- prefix', () => {
+        expect(detectProvider('sk-ant-api03-abcdef12345')).toBe('anthropic');
+      });
+
+      it('returns null for ambiguous sk- keys (OpenAI vs DeepSeek)', () => {
+        expect(detectProvider('sk-proj-1234567890')).toBeNull();
+        expect(detectProvider('sk-deepseek-12345')).toBeNull();
+        expect(detectProvider('sk-12345')).toBeNull();
+      });
+
+      it('returns null for empty or unrecognized keys', () => {
+        expect(detectProvider('')).toBeNull();
+        expect(detectProvider('   ')).toBeNull();
+        expect(detectProvider('ghp_github_token_12345')).toBeNull();
+      });
     });
 
-    it('saves Gemini key to localStorage when remembered', () => {
-      saveGeminiKey('AIzaSyRemembered', true);
-      expect(mockLocal.getItem('starred_repos_gemini_key')).toBe('AIzaSyRemembered');
-      expect(mockSession.getItem('starred_repos_gemini_key')).toBeNull();
-      expect(loadGeminiKey()).toBe('AIzaSyRemembered');
-      expect(isGeminiKeyRemembered()).toBe(true);
+    describe('Provider-Aware Settings Schema & Persistence', () => {
+      it('loads default settings when storage is empty', () => {
+        const settings = loadLlmSettings();
+        expect(settings.provider).toBe('google');
+        expect(settings.providers.openai.model).toBe('gpt-6-luna');
+        expect(settings.providers.anthropic.model).toBe('claude-sonnet-5-5');
+        expect(settings.providers.google.model).toBe('gemini-3.8-flash');
+        expect(settings.providers.deepseek.model).toBe('deepseek-chat');
+        expect(settings.providers.openai.intervalSec).toBeNull();
+      });
+
+      it('persists and roundtrips multi-provider settings with remember flags', () => {
+        const settings = createDefaultLlmSettings();
+        settings.provider = 'anthropic';
+        // Google remembered
+        settings.providers.google = {
+          apiKey: 'AIzaSyGoogleKey',
+          model: 'gemini-3.8-flash',
+          intervalSec: 4.5,
+          remember: true,
+        };
+        // OpenAI session-only
+        settings.providers.openai = {
+          apiKey: 'sk-proj-OpenAiKey',
+          model: 'gpt-6-luna',
+          intervalSec: 1.5,
+          remember: false,
+        };
+
+        saveLlmSettings(settings);
+
+        // Verify physical storage segregation
+        const rawLocal = JSON.parse(mockLocal.getItem('starred_repos_llm_settings') || '{}');
+        const rawSession = JSON.parse(mockSession.getItem('starred_repos_llm_settings') || '{}');
+
+        // Remembered key in localStorage, stripped from sessionStorage
+        expect(rawLocal.providers.google.apiKey).toBe('AIzaSyGoogleKey');
+        expect(rawSession.providers.google.apiKey).toBe('');
+
+        // Non-remembered key in sessionStorage, stripped from localStorage
+        expect(rawSession.providers.openai.apiKey).toBe('sk-proj-OpenAiKey');
+        expect(rawLocal.providers.openai.apiKey).toBe('');
+
+        // Reload and assert merged result
+        const loaded = loadLlmSettings();
+        expect(loaded.provider).toBe('anthropic');
+        expect(loaded.providers.google.apiKey).toBe('AIzaSyGoogleKey');
+        expect(loaded.providers.google.intervalSec).toBe(4.5);
+        expect(loaded.providers.google.remember).toBe(true);
+
+        expect(loaded.providers.openai.apiKey).toBe('sk-proj-OpenAiKey');
+        expect(loaded.providers.openai.intervalSec).toBe(1.5);
+        expect(loaded.providers.openai.remember).toBe(false);
+      });
+
+      it('clears specific provider key from storage without affecting others', () => {
+        const settings = createDefaultLlmSettings();
+        settings.providers.google.apiKey = 'AIzaSyGoogle';
+        settings.providers.google.remember = true;
+        settings.providers.anthropic.apiKey = 'sk-ant-Claude';
+        settings.providers.anthropic.remember = false;
+        saveLlmSettings(settings);
+
+        clearLlmKey('google');
+
+        const reloaded = loadLlmSettings();
+        expect(reloaded.providers.google.apiKey).toBe('');
+        expect(reloaded.providers.google.remember).toBe(false);
+        expect(reloaded.providers.anthropic.apiKey).toBe('sk-ant-Claude');
+      });
     });
 
-    it('clears Gemini key from both storage locations', () => {
-      mockSession.setItem('starred_repos_gemini_key', 'session-key');
-      mockLocal.setItem('starred_repos_gemini_key', 'local-key');
-      clearGeminiKey();
-      expect(mockSession.getItem('starred_repos_gemini_key')).toBeNull();
-      expect(mockLocal.getItem('starred_repos_gemini_key')).toBeNull();
-      expect(loadGeminiKey()).toBeNull();
+    describe('Legacy Settings Migration', () => {
+      it('migrates old single-Gemini keys into providers.google and deletes old keys', () => {
+        mockLocal.setItem('starred_repos_gemini_key', 'AIzaSyLegacyKey');
+        mockLocal.setItem('starred_repos_gemini_model', 'custom-gemini-model');
+        mockLocal.setItem('starred_repos_gemini_interval', '5.5');
+
+        const migrated = loadLlmSettings();
+        expect(migrated.provider).toBe('google');
+        expect(migrated.providers.google.apiKey).toBe('AIzaSyLegacyKey');
+        expect(migrated.providers.google.model).toBe('custom-gemini-model');
+        expect(migrated.providers.google.intervalSec).toBe(5.5);
+        expect(migrated.providers.google.remember).toBe(true);
+
+        // Old keys must be deleted
+        expect(mockLocal.getItem('starred_repos_gemini_key')).toBeNull();
+        expect(mockLocal.getItem('starred_repos_gemini_model')).toBeNull();
+        expect(mockLocal.getItem('starred_repos_gemini_interval')).toBeNull();
+      });
     });
 
-    it('saves and loads model and interval settings', () => {
-      saveGeminiSettings({ model: 'custom-model', intervalSec: 2.5 });
-      expect(loadGeminiSettings()).toEqual({ model: 'custom-model', intervalSec: 2.5 });
+    describe('Deprecated Legacy Wrappers', () => {
+      it('saves Gemini key to sessionStorage by default', () => {
+        saveGeminiKey('AIzaSyDefault', false);
+        expect(loadGeminiKey()).toBe('AIzaSyDefault');
+        expect(isGeminiKeyRemembered()).toBe(false);
+      });
+
+      it('saves Gemini key to localStorage when remembered', () => {
+        saveGeminiKey('AIzaSyRemembered', true);
+        expect(loadGeminiKey()).toBe('AIzaSyRemembered');
+        expect(isGeminiKeyRemembered()).toBe(true);
+      });
+
+      it('clears Gemini key from both storage locations', () => {
+        saveGeminiKey('AIzaSyTemp', true);
+        clearGeminiKey();
+        expect(loadGeminiKey()).toBeNull();
+      });
+
+      it('saves and loads model and interval settings', () => {
+        saveGeminiSettings({ model: 'custom-model', intervalSec: 2.5 });
+        expect(loadGeminiSettings()).toEqual({ model: 'custom-model', intervalSec: 2.5 });
+      });
     });
   });
 

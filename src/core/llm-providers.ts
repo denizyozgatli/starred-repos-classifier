@@ -176,7 +176,7 @@ export const openaiProvider: LLMProviderDef = {
   label: 'OpenAI',
   keyPattern: /^sk-(?!ant-)/,
   keyPlaceholder: 'sk-...',
-  defaultModel: 'gpt-4o-mini',
+  defaultModel: 'gpt-6-luna',
   defaultIntervalSec: 1,
   async listModels({ apiKey, signal }) {
     const res = await safeFetch(
@@ -210,6 +210,9 @@ export const openaiProvider: LLMProviderDef = {
         messages: [{ role: 'user', content: prompt }],
         temperature: 0,
       };
+      if (model.startsWith('gpt-6')) {
+        payload.reasoning_effort = 'none';
+      }
       if (withJsonFormat) {
         payload.response_format = { type: 'json_object' };
       }
@@ -311,7 +314,7 @@ export const anthropicProvider: LLMProviderDef = {
   label: 'Anthropic (Claude)',
   keyPattern: /^sk-ant-/,
   keyPlaceholder: 'sk-ant-...',
-  defaultModel: 'claude-3-5-sonnet-20241022',
+  defaultModel: 'claude-sonnet-5-5',
   defaultIntervalSec: 1,
   async listModels({ apiKey, signal }) {
     const res = await safeFetch(

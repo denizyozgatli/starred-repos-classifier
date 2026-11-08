@@ -35,6 +35,7 @@ interface HeaderProps {
   onDisconnect?: () => void;
   onOpenSettings?: () => void;
   hasGeminiKey?: boolean;
+  hasLlmKey?: boolean;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -56,7 +57,9 @@ export const Header: React.FC<HeaderProps> = ({
   onDisconnect,
   onOpenSettings,
   hasGeminiKey = false,
+  hasLlmKey,
 }) => {
+  const isKeyConfigured = hasLlmKey !== undefined ? hasLlmKey : hasGeminiKey;
   const isFiltered = totalCount !== filteredCount;
   const relativeSyncTime = useMemo(() => formatRelativeTime(lastSyncAt ?? null), [lastSyncAt]);
 
@@ -178,10 +181,10 @@ export const Header: React.FC<HeaderProps> = ({
                 aria-label="Open classification settings"
               >
                 <Settings className="w-3.5 h-3.5" aria-hidden="true" />
-                {hasGeminiKey && (
+                {isKeyConfigured && (
                   <span
                     className="absolute top-1.5 right-1.5 w-1.5 h-1.5 rounded-full bg-[#3fb950]"
-                    title="Gemini API key configured"
+                    title="AI API key configured"
                   />
                 )}
               </button>

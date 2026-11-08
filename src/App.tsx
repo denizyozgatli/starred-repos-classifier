@@ -16,7 +16,12 @@ import { EmptyState } from './components/EmptyState.tsx';
 import { ConnectGitHub } from './components/ConnectGitHub.tsx';
 import { SettingsModal } from './components/SettingsModal.tsx';
 import { useGitHubSync } from './hooks/useGitHubSync.ts';
-import { loadGeminiKey } from './lib/storage/settings.ts';
+import { loadLlmSettings } from './lib/storage/settings.ts';
+
+function isLlmKeyConfigured(): boolean {
+  const settings = loadLlmSettings();
+  return Boolean(settings.providers[settings.provider]?.apiKey?.trim());
+}
 
 export default function App() {
   const sync = useGitHubSync();
@@ -26,7 +31,7 @@ export default function App() {
   const [importedMetadata, setImportedMetadata] = useState<DatasetValidationResult['metadata'] | null>(null);
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
   const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
-  const [hasGeminiKey, setHasGeminiKey] = useState<boolean>(() => Boolean(loadGeminiKey()));
+  const [hasLlmKey, setHasLlmKey] = useState<boolean>(() => isLlmKeyConfigured());
   const [dismissedListsNotice, setDismissedListsNotice] = useState(false);
   const [showConnectScreen, setShowConnectScreen] = useState(false);
 
@@ -174,7 +179,8 @@ export default function App() {
         onRefresh={sync.refresh}
         onDisconnect={sync.disconnect}
         onOpenSettings={() => setIsSettingsModalOpen(true)}
-        hasGeminiKey={hasGeminiKey}
+        hasLlmKey={hasLlmKey}
+        hasGeminiKey={hasLlmKey}
       />
 
       <main className="flex-1 max-w-7xl mx-auto w-full px-3.5 sm:px-8 py-4 sm:py-6 space-y-3.5 sm:space-y-4">
@@ -215,19 +221,28 @@ export default function App() {
 
         {/* LLM Invalid Key Banner */}
         {sync.llmStatus === 'invalid_key' && (
-          <div className="bg-[#161b22] border border-[#f85149]/40 rounded-xl px-4 py-2.5 flex items-center justify-between text-xs text-[#ff7b72] animate-in fade-in">
+          <div className="bg-[#161b22] border border-[#f85149]/40 rounded-xl px-4 py-2.5 flex items-center justify-between text-xs text-[#ff7b72] animate-in fade-in gap-3">
             <div className="flex items-center gap-2">
               <AlertTriangle className="w-4 h-4 shrink-0 text-[#f85149]" aria-hidden="true" />
               <span>LLM authentication failed: invalid API key. Remaining ambiguous repositories were categorized as 'Other'.</span>
             </div>
-            <button
-              type="button"
-              onClick={sync.clearLlmNotice}
-              className="text-github-muted hover:text-white p-1 rounded-md transition-colors cursor-pointer"
-              aria-label="Dismiss notice"
-            >
-              <X className="w-3.5 h-3.5" />
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setIsSettingsModalOpen(true)}
+                className="text-xs font-semibold text-white bg-[#21262d] hover:bg-[#30363d] border border-[#30363d] px-2.5 py-1 rounded-md transition-colors cursor-pointer"
+              >
+                Open Settings
+              </button>
+              <button
+                type="button"
+                onClick={sync.clearLlmNotice}
+                className="text-github-muted hover:text-white p-1 rounded-md transition-colors cursor-pointer"
+                aria-label="Dismiss notice"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
           </div>
         )}
 
@@ -407,11 +422,12 @@ export default function App() {
         isOpen={isSettingsModalOpen}
         onClose={() => {
           setIsSettingsModalOpen(false);
-          setHasGeminiKey(Boolean(loadGeminiKey()));
+          setHasLlmKey(isLlmKeyConfigured());
         }}
-        onReclassifyOther={async () => {
-          await sync.reclassifyOther();
+        onReclassifyOther={async config => {
+          await sync.reclassifyOther(config);
         }}
+        fetchLlmModels={sync.fetchLlmModels}
         isSyncing={sync.status === 'syncing' || sync.isBackgroundRefreshing}
         hasCachedData={Boolean(sync.dataset)}
       />

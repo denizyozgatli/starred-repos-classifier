@@ -74,7 +74,7 @@ export const ConnectGitHub: React.FC<ConnectGitHubProps> = ({
           <p className="text-xs text-github-muted" aria-live="polite">
             {isLlm ? (
               <span>
-                Classifying with Gemini: <strong className="text-white font-mono">{done}</strong> /{' '}
+                Classifying with AI: <strong className="text-white font-mono">{done}</strong> /{' '}
                 <span className="font-mono">{total || '…'}</span>
               </span>
             ) : isClassifying ? (

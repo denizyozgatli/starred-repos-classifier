@@ -7,11 +7,14 @@ import {
   type SyncError,
   type LLMSyncStatus,
   type GeminiSyncStatus,
+  type LLMSyncOptions,
   mapToSyncError,
   resolveSyncFailure,
 } from '../lib/sync.ts';
-import { loadToken, saveToken, clearToken, loadGeminiKey, loadGeminiSettings } from '../lib/storage/settings.ts';
+import { loadToken, saveToken, clearToken, loadLlmSettings } from '../lib/storage/settings.ts';
 import { createDefaultStore, type KeyValueStore } from '../lib/storage/datasetStore.ts';
+import { getLLMProvider, type LLMProviderId } from '../core/llm-providers.ts';
+import { PROVIDER_DEFAULTS } from '../core/llm.ts';
 
 export type SyncStatus = 'idle' | 'syncing' | 'ready' | 'error';
 
@@ -40,13 +43,14 @@ export interface UseGitHubSyncOptions {
 export interface UseGitHubSyncReturn extends GitHubSyncState {
   connect: (token: string, remember: boolean) => Promise<boolean>;
   refresh: () => Promise<void>;
-  reclassifyOther: () => Promise<boolean>;
+  reclassifyOther: (llmConfig?: LLMSyncOptions) => Promise<boolean>;
   cancel: () => void;
   disconnect: () => Promise<void>;
   clearError: () => void;
   clearTokenExpiredNotice: () => void;
   clearLlmNotice: () => void;
   clearGeminiNotice: () => void;
+  fetchLlmModels: (providerId: LLMProviderId, apiKey: string) => Promise<string[]>;
 }
 
 export function useGitHubSync(options: UseGitHubSyncOptions = {}): UseGitHubSyncReturn {
@@ -70,7 +74,7 @@ export function useGitHubSync(options: UseGitHubSyncOptions = {}): UseGitHubSync
     async (
       token: string,
       isBackground: boolean = false,
-      syncOpts: { ignoreOtherCache?: boolean } = {}
+      syncOpts: { ignoreOtherCache?: boolean; llm?: LLMSyncOptions } = {}
     ): Promise<boolean> => {
       // Abort any existing operation
       if (abortControllerRef.current) {
@@ -91,22 +95,29 @@ export function useGitHubSync(options: UseGitHubSyncOptions = {}): UseGitHubSync
       }
 
       try {
-        const storedGeminiKey = loadGeminiKey();
-        const storedGeminiSettings = loadGeminiSettings();
-        const geminiConfig = storedGeminiKey
-          ? {
-              apiKey: storedGeminiKey,
-              model: storedGeminiSettings.model,
-              minIntervalMs: storedGeminiSettings.intervalSec * 1000,
-            }
-          : undefined;
+        let effectiveLlm: LLMSyncOptions | undefined = syncOpts.llm;
+        if (!effectiveLlm) {
+          const settings = loadLlmSettings();
+          const activeProvider = settings.provider;
+          const activeEntry = settings.providers[activeProvider];
+          if (activeEntry?.apiKey?.trim()) {
+            effectiveLlm = {
+              provider: activeProvider,
+              apiKey: activeEntry.apiKey.trim(),
+              model: activeEntry.model || PROVIDER_DEFAULTS[activeProvider].defaultModel,
+              minIntervalMs:
+                (activeEntry.intervalSec !== null && activeEntry.intervalSec !== undefined
+                  ? activeEntry.intervalSec
+                  : PROVIDER_DEFAULTS[activeProvider].defaultIntervalSec) * 1000,
+            };
+          }
+        }
 
         const result = await syncStarredRepos({
           token,
           store,
           signal: controller.signal,
-          llm: geminiConfig ? { provider: 'google', ...geminiConfig } : undefined,
-          gemini: geminiConfig,
+          llm: effectiveLlm,
           ignoreOtherCache: syncOpts.ignoreOtherCache,
           onProgress: p => {
             setPhase(p.phase);
@@ -247,11 +258,22 @@ export function useGitHubSync(options: UseGitHubSyncOptions = {}): UseGitHubSync
     await runSync(token, Boolean(dataset));
   }, [runSync, dataset]);
 
-  const reclassifyOther = useCallback(async (): Promise<boolean> => {
-    const token = loadToken();
-    if (!token) return false;
-    return runSync(token, false, { ignoreOtherCache: true });
-  }, [runSync]);
+  const reclassifyOther = useCallback(
+    async (llmConfig?: LLMSyncOptions): Promise<boolean> => {
+      const token = loadToken();
+      if (!token) return false;
+      return runSync(token, false, { ignoreOtherCache: true, llm: llmConfig });
+    },
+    [runSync]
+  );
+
+  const fetchLlmModels = useCallback(
+    async (providerId: LLMProviderId, apiKey: string): Promise<string[]> => {
+      const provider = getLLMProvider(providerId);
+      return provider.listModels({ apiKey });
+    },
+    []
+  );
 
   const cancel = useCallback((): void => {
     if (abortControllerRef.current) {
@@ -322,5 +344,6 @@ export function useGitHubSync(options: UseGitHubSyncOptions = {}): UseGitHubSync
     clearTokenExpiredNotice,
     clearLlmNotice,
     clearGeminiNotice,
+    fetchLlmModels,
   };
 }

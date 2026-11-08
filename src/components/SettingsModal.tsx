@@ -1,21 +1,28 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { Settings, X, Eye, EyeOff, ShieldCheck, Sparkles, Trash2, Check } from 'lucide-react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { Settings, X, Eye, EyeOff, ShieldCheck, Sparkles, Trash2, Check, RefreshCw } from 'lucide-react';
 import {
-  loadGeminiKey,
-  saveGeminiKey,
-  clearGeminiKey,
-  isGeminiKeyRemembered,
-  loadGeminiSettings,
-  saveGeminiSettings,
+  loadLlmSettings,
+  saveLlmSettings,
+  clearLlmKey,
+  detectProvider,
+  createDefaultLlmSettings,
+  type LlmSettings,
 } from '../lib/storage/settings.ts';
+import {
+  type LLMProviderId,
+  LLM_PROVIDERS,
+  getLLMProvider,
+} from '../core/llm-providers.ts';
 import { PROVIDER_DEFAULTS } from '../core/llm.ts';
+import type { LLMSyncOptions } from '../lib/sync.ts';
 
 interface SettingsModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onReclassifyOther?: () => Promise<void>;
+  onReclassifyOther?: (config?: LLMSyncOptions) => Promise<boolean | void>;
   isSyncing?: boolean;
   hasCachedData?: boolean;
+  fetchLlmModels?: (providerId: LLMProviderId, apiKey: string) => Promise<string[]>;
 }
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({
@@ -24,27 +31,79 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   onReclassifyOther,
   isSyncing = false,
   hasCachedData = false,
+  fetchLlmModels,
 }) => {
-  const defaultModel = PROVIDER_DEFAULTS.google.defaultModel;
-  const [apiKey, setApiKey] = useState('');
-  const [remember, setRemember] = useState(false);
+  const [settings, setSettings] = useState<LlmSettings>(() => createDefaultLlmSettings());
   const [showKey, setShowKey] = useState(false);
-  const [model, setModel] = useState(defaultModel);
-  const [intervalSec, setIntervalSec] = useState(4.0);
+  const [detectHint, setDetectHint] = useState<string | null>(null);
   const [savedBanner, setSavedBanner] = useState(false);
+
+  // Model list state (kept in component state only, NOT persisted)
+  const [modelList, setModelList] = useState<string[] | null>(null);
+  const [isLoadingModels, setIsLoadingModels] = useState(false);
+  const [modelListError, setModelListError] = useState<string | null>(null);
+  const [manualModelEntry, setManualModelEntry] = useState(false);
+
   const modalRef = useRef<HTMLDivElement>(null);
+
+  const currentProviderId = settings.provider;
+  const currentProviderDef = getLLMProvider(currentProviderId);
+  const currentEntry = settings.providers[currentProviderId] || {
+    apiKey: '',
+    model: PROVIDER_DEFAULTS[currentProviderId].defaultModel,
+    intervalSec: null,
+    remember: false,
+  };
+  const currentKey = currentEntry.apiKey;
+  const currentModel = currentEntry.model || PROVIDER_DEFAULTS[currentProviderId].defaultModel;
+  const isAutoInterval = currentEntry.intervalSec === null;
+  const displayInterval = isAutoInterval
+    ? PROVIDER_DEFAULTS[currentProviderId].defaultIntervalSec
+    : currentEntry.intervalSec;
+
+  // Fetch model list for active provider and key
+  const fetchModelsForActive = useCallback(
+    async (providerId: LLMProviderId, apiKey: string) => {
+      const trimmed = apiKey.trim();
+      if (!trimmed) {
+        setModelList(null);
+        setModelListError(null);
+        return;
+      }
+
+      setIsLoadingModels(true);
+      setModelListError(null);
+      try {
+        const fetcher = fetchLlmModels ?? ((p, k) => getLLMProvider(p).listModels({ apiKey: k }));
+        const models = await fetcher(providerId, trimmed);
+        setModelList(models);
+      } catch {
+        setModelListError('Could not load model list — enter the model id manually.');
+      } finally {
+        setIsLoadingModels(false);
+      }
+    },
+    [fetchLlmModels]
+  );
 
   // Load stored settings on open
   useEffect(() => {
     if (isOpen) {
-      setApiKey(loadGeminiKey() || '');
-      setRemember(isGeminiKeyRemembered());
-      const settings = loadGeminiSettings();
-      setModel(settings.model || defaultModel);
-      setIntervalSec(settings.intervalSec || 4.0);
+      const loaded = loadLlmSettings();
+      setSettings(loaded);
+      setShowKey(false);
+      setDetectHint(null);
       setSavedBanner(false);
+      setModelList(null);
+      setModelListError(null);
+      setManualModelEntry(false);
+
+      const activeEntry = loaded.providers[loaded.provider];
+      if (activeEntry?.apiKey?.trim()) {
+        fetchModelsForActive(loaded.provider, activeEntry.apiKey.trim());
+      }
     }
-  }, [isOpen]);
+  }, [isOpen, fetchModelsForActive]);
 
   // Handle ESC key
   useEffect(() => {
@@ -60,10 +119,136 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
   if (!isOpen) return null;
 
+  const handleProviderSelect = (newProvider: LLMProviderId) => {
+    setSettings(prev => ({
+      ...prev,
+      provider: newProvider,
+    }));
+    setDetectHint(null);
+    setModelList(null);
+    setModelListError(null);
+    setManualModelEntry(false);
+
+    const entry = settings.providers[newProvider];
+    if (entry?.apiKey?.trim()) {
+      fetchModelsForActive(newProvider, entry.apiKey.trim());
+    }
+  };
+
+  const handleKeyChange = (val: string) => {
+    const detected = detectProvider(val);
+    let targetProvider = settings.provider;
+    let hint: string | null = null;
+
+    if (val.trim()) {
+      if (detected) {
+        targetProvider = detected;
+        hint = null;
+      } else {
+        hint = 'Provider could not be detected from this key — please choose one.';
+      }
+    } else {
+      hint = null;
+    }
+
+    setDetectHint(hint);
+    setSettings(prev => ({
+      ...prev,
+      provider: targetProvider,
+      providers: {
+        ...prev.providers,
+        [targetProvider]: {
+          ...prev.providers[targetProvider],
+          apiKey: val,
+        },
+      },
+    }));
+
+    if (val.trim()) {
+      fetchModelsForActive(targetProvider, val.trim());
+    } else {
+      setModelList(null);
+      setModelListError(null);
+    }
+  };
+
+  const handleModelChange = (newModel: string) => {
+    if (newModel === '__manual__') {
+      setManualModelEntry(true);
+      return;
+    }
+    setSettings(prev => ({
+      ...prev,
+      providers: {
+        ...prev.providers,
+        [prev.provider]: {
+          ...prev.providers[prev.provider],
+          model: newModel,
+        },
+      },
+    }));
+  };
+
+  const handleAutoIntervalToggle = (checked: boolean) => {
+    setSettings(prev => ({
+      ...prev,
+      providers: {
+        ...prev.providers,
+        [prev.provider]: {
+          ...prev.providers[prev.provider],
+          intervalSec: checked ? null : PROVIDER_DEFAULTS[prev.provider].defaultIntervalSec,
+        },
+      },
+    }));
+  };
+
+  const handleIntervalNumberChange = (val: number) => {
+    setSettings(prev => ({
+      ...prev,
+      providers: {
+        ...prev.providers,
+        [prev.provider]: {
+          ...prev.providers[prev.provider],
+          intervalSec: Math.max(1, val),
+        },
+      },
+    }));
+  };
+
+  const handleRememberToggle = (checked: boolean) => {
+    setSettings(prev => ({
+      ...prev,
+      providers: {
+        ...prev.providers,
+        [prev.provider]: {
+          ...prev.providers[prev.provider],
+          remember: checked,
+        },
+      },
+    }));
+  };
+
+  const handleRemoveKey = () => {
+    clearLlmKey(currentProviderId);
+    setSettings(prev => ({
+      ...prev,
+      providers: {
+        ...prev.providers,
+        [prev.provider]: {
+          ...prev.providers[prev.provider],
+          apiKey: '',
+          remember: false,
+        },
+      },
+    }));
+    setDetectHint(null);
+    setModelList(null);
+    setModelListError(null);
+  };
+
   const handleSave = (e: React.FormEvent) => {
     e.preventDefault();
-    saveGeminiKey(apiKey, remember);
-    saveGeminiSettings(model, Math.max(1, intervalSec));
+    saveLlmSettings(settings);
     setSavedBanner(true);
     setTimeout(() => {
       setSavedBanner(false);
@@ -71,22 +256,22 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     }, 600);
   };
 
-  const handleRemoveKey = () => {
-    clearGeminiKey();
-    setApiKey('');
-    setRemember(false);
-  };
-
   const handleReclassify = async () => {
-    saveGeminiKey(apiKey, remember);
-    saveGeminiSettings(model, Math.max(1, intervalSec));
+    saveLlmSettings(settings);
     onClose();
     if (onReclassifyOther) {
-      await onReclassifyOther();
+      const activeEntry = settings.providers[currentProviderId];
+      const config: LLMSyncOptions = {
+        provider: currentProviderId,
+        apiKey: activeEntry.apiKey.trim(),
+        model: activeEntry.model || PROVIDER_DEFAULTS[currentProviderId].defaultModel,
+        minIntervalSec: activeEntry.intervalSec ?? undefined,
+      };
+      await onReclassifyOther(config);
     }
   };
 
-  const hasKey = Boolean(apiKey.trim());
+  const hasKey = Boolean(currentKey.trim());
 
   return (
     <div
@@ -110,17 +295,17 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             </div>
             <div>
               <h2 id="settings-modal-title" className="text-sm font-semibold text-white">
-                Classification Settings
+                AI Classification Settings
               </h2>
               <p className="text-xs text-github-muted mt-0.5">
-                Configure optional in-browser Gemini LLM classification
+                Configure optional in-browser LLM classification for unmatched repositories
               </p>
             </div>
           </div>
           <button
             type="button"
             onClick={onClose}
-            className="text-github-muted hover:text-white p-1 rounded-md hover:bg-[#21262d] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#58a6ff]"
+            className="text-github-muted hover:text-white p-1 rounded-md hover:bg-[#21262d] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#58a6ff] cursor-pointer"
             aria-label="Close modal"
           >
             <X className="w-4 h-4" />
@@ -136,18 +321,51 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             </div>
           )}
 
-          {/* Gemini Key Input */}
+          {/* Provider Selector */}
+          <div className="space-y-1.5">
+            <label className="font-semibold text-white/90">AI Provider</label>
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
+              {Object.values(LLM_PROVIDERS).map(p => {
+                const isSelected = p.id === currentProviderId;
+                const providerKeyConfigured = Boolean(settings.providers[p.id]?.apiKey?.trim());
+                return (
+                  <button
+                    key={p.id}
+                    type="button"
+                    onClick={() => handleProviderSelect(p.id)}
+                    className={`px-2.5 py-2 rounded-xl text-xs font-medium border text-center transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
+                      isSelected
+                        ? 'bg-[#21262d] border-[#58a6ff] text-white shadow-xs'
+                        : 'bg-[#0d1117] border-[#30363d] text-[#8b949e] hover:text-white hover:border-[#8b949e]'
+                    }`}
+                  >
+                    <span>{p.label}</span>
+                    {providerKeyConfigured && (
+                      <span className="w-1.5 h-1.5 rounded-full bg-[#3fb950]" title="Key configured" />
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+            {detectHint && (
+              <p className="text-[11px] text-[#e3b341] mt-1 leading-relaxed">
+                {detectHint}
+              </p>
+            )}
+          </div>
+
+          {/* API Key Input */}
           <div className="space-y-1.5">
             <div className="flex items-center justify-between">
-              <label htmlFor="gemini-key-input" className="font-semibold text-white/90">
-                Gemini API key (optional)
+              <label htmlFor="llm-key-input" className="font-semibold text-white/90">
+                {currentProviderDef.label} API key (optional)
               </label>
               {hasKey && (
                 <button
                   type="button"
                   onClick={handleRemoveKey}
                   className="text-[11px] text-[#ff7b72] hover:text-[#f85149] inline-flex items-center gap-1 transition-colors cursor-pointer"
-                  title="Remove stored Gemini API key"
+                  title={`Remove stored ${currentProviderDef.label} key`}
                 >
                   <Trash2 className="w-3 h-3" />
                   <span>Remove key</span>
@@ -156,11 +374,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             </div>
             <div className="relative">
               <input
-                id="gemini-key-input"
+                id="llm-key-input"
                 type={showKey ? 'text' : 'password'}
-                value={apiKey}
-                onChange={e => setApiKey(e.target.value)}
-                placeholder="AIzaSy..."
+                value={currentKey}
+                onChange={e => handleKeyChange(e.target.value)}
+                placeholder={currentProviderDef.keyPlaceholder}
                 autoComplete="off"
                 spellCheck="false"
                 className="w-full bg-[#0d1117] border border-[#30363d] focus:border-[#58a6ff] focus:ring-1 focus:ring-[#58a6ff] rounded-xl text-xs font-mono px-3.5 py-2.5 pr-11 text-white placeholder:text-github-muted placeholder:font-sans focus-visible:outline-none transition-colors"
@@ -182,13 +400,13 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             <label className="flex items-center gap-2 cursor-pointer select-none">
               <input
                 type="checkbox"
-                checked={remember}
-                onChange={e => setRemember(e.target.checked)}
+                checked={Boolean(currentEntry.remember)}
+                onChange={e => handleRememberToggle(e.target.checked)}
                 className="w-4 h-4 rounded border-[#30363d] bg-[#0d1117] text-[#238636] focus:ring-[#58a6ff] focus:ring-offset-0 transition-colors"
               />
               <span className="text-white/90 font-medium">Remember on this device</span>
             </label>
-            {remember && (
+            {currentEntry.remember && (
               <p className="text-[11px] text-[#e3b341] pl-6 leading-relaxed">
                 Warning: The key will be stored unencrypted in your browser's localStorage.
               </p>
@@ -197,41 +415,131 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
           {/* Model & Interval Grid */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+            {/* Model Picker */}
             <div className="space-y-1.5">
-              <label htmlFor="gemini-model-input" className="font-semibold text-white/90">
-                Model
-              </label>
-              <input
-                id="gemini-model-input"
-                type="text"
-                value={model}
-                onChange={e => setModel(e.target.value)}
-                placeholder="gemini-3.8-flash"
-                className="w-full bg-[#0d1117] border border-[#30363d] focus:border-[#58a6ff] focus:ring-1 focus:ring-[#58a6ff] rounded-xl text-xs font-mono px-3 py-2 text-white placeholder:text-github-muted focus-visible:outline-none transition-colors"
-              />
+              <div className="flex items-center justify-between">
+                <label htmlFor="llm-model-picker" className="font-semibold text-white/90">
+                  Model
+                </label>
+                <div className="flex items-center gap-1.5">
+                  {manualModelEntry && modelList && modelList.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => setManualModelEntry(false)}
+                      className="text-[11px] text-[#58a6ff] hover:underline cursor-pointer"
+                    >
+                      Choose from list
+                    </button>
+                  )}
+                  {hasKey && (
+                    <button
+                      type="button"
+                      onClick={() => fetchModelsForActive(currentProviderId, currentKey)}
+                      disabled={isLoadingModels}
+                      className="text-github-muted hover:text-white p-0.5 rounded transition-colors cursor-pointer disabled:opacity-40"
+                      title="Refresh model list"
+                      aria-label="Refresh model list"
+                    >
+                      <RefreshCw className={`w-3 h-3 ${isLoadingModels ? 'animate-spin' : ''}`} />
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {manualModelEntry ? (
+                <input
+                  id="llm-model-picker"
+                  type="text"
+                  value={currentModel}
+                  onChange={e => handleModelChange(e.target.value)}
+                  placeholder={PROVIDER_DEFAULTS[currentProviderId].defaultModel}
+                  className="w-full bg-[#0d1117] border border-[#30363d] focus:border-[#58a6ff] focus:ring-1 focus:ring-[#58a6ff] rounded-xl text-xs font-mono px-3 py-2 text-white placeholder:text-github-muted focus-visible:outline-none transition-colors"
+                />
+              ) : (
+                <select
+                  id="llm-model-picker"
+                  value={currentModel}
+                  onChange={e => handleModelChange(e.target.value)}
+                  disabled={isLoadingModels}
+                  className="w-full bg-[#0d1117] border border-[#30363d] focus:border-[#58a6ff] focus:ring-1 focus:ring-[#58a6ff] rounded-xl text-xs font-mono px-3 py-2 text-white placeholder:text-github-muted focus-visible:outline-none transition-colors cursor-pointer"
+                >
+                  {isLoadingModels ? (
+                    <option disabled value="">
+                      Loading models…
+                    </option>
+                  ) : (
+                    <>
+                      {/* Show current model if not in fetched list */}
+                      {modelList && !modelList.includes(currentModel) && (
+                        <option value={currentModel}>{currentModel}</option>
+                      )}
+                      {modelList?.map(m => (
+                        <option key={m} value={m}>
+                          {m}
+                        </option>
+                      ))}
+                      {!modelList && (
+                        <option value={currentModel}>{currentModel}</option>
+                      )}
+                      <option value="__manual__">Enter manually…</option>
+                    </>
+                  )}
+                </select>
+              )}
+
+              {modelListError && (
+                <p className="text-[11px] text-[#f85149] leading-relaxed">
+                  {modelListError}
+                </p>
+              )}
             </div>
 
+            {/* Request Interval */}
             <div className="space-y-1.5">
-              <label htmlFor="gemini-interval-input" className="font-semibold text-white/90">
-                Request interval (seconds)
-              </label>
+              <div className="flex items-center justify-between">
+                <label htmlFor="llm-interval-input" className="font-semibold text-white/90">
+                  Delay (seconds)
+                </label>
+                <label className="flex items-center gap-1.5 cursor-pointer select-none text-[11px] text-github-muted hover:text-white">
+                  <input
+                    type="checkbox"
+                    checked={isAutoInterval}
+                    onChange={e => handleAutoIntervalToggle(e.target.checked)}
+                    className="w-3.5 h-3.5 rounded border-[#30363d] bg-[#0d1117] text-[#238636] focus:ring-[#58a6ff] focus:ring-offset-0"
+                  />
+                  <span>Auto (recommended)</span>
+                </label>
+              </div>
               <input
-                id="gemini-interval-input"
+                id="llm-interval-input"
                 type="number"
                 min="1"
                 step="0.5"
-                value={intervalSec}
-                onChange={e => setIntervalSec(parseFloat(e.target.value) || 1)}
-                className="w-full bg-[#0d1117] border border-[#30363d] focus:border-[#58a6ff] focus:ring-1 focus:ring-[#58a6ff] rounded-xl text-xs font-mono px-3 py-2 text-white placeholder:text-github-muted focus-visible:outline-none transition-colors"
+                disabled={isAutoInterval}
+                value={displayInterval ?? ''}
+                onChange={e => handleIntervalNumberChange(parseFloat(e.target.value) || 1)}
+                className="w-full bg-[#0d1117] border border-[#30363d] focus:border-[#58a6ff] focus:ring-1 focus:ring-[#58a6ff] rounded-xl text-xs font-mono px-3 py-2 text-white placeholder:text-github-muted focus-visible:outline-none transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               />
             </div>
           </div>
 
-          {/* Notice Text */}
+          {/* Interval Note */}
+          <p className="text-[11px] text-github-muted leading-relaxed">
+            Auto uses the provider's recommended delay. Lower it (≤1s) if you have a paid/high-quota tier; raise it (10–15s) if you see rate-limit warnings on a free tier. Failed requests retry automatically; repos that still fail fall back to rule-based classification.
+          </p>
+
+          {/* Provider Security / Referrer Notice */}
           <div className="flex items-start gap-2.5 p-3 rounded-xl bg-[#21262d]/60 border border-[#30363d] text-[11px] text-github-muted leading-relaxed">
             <ShieldCheck className="w-4 h-4 shrink-0 text-[#58a6ff] mt-0.5" aria-hidden="true" />
             <span>
-              The key is sent directly from your browser to Google's Gemini API. Restrict the key to this site's URL (HTTP referrer) in Google AI Studio / Cloud Console.
+              {currentProviderId === 'google' &&
+                "The key is sent directly from your browser to Google's Gemini API. Restrict the key to this site's URL (HTTP referrer) in Google AI Studio / Cloud Console."}
+              {currentProviderId === 'openai' &&
+                "The key is sent directly from your browser to OpenAI's API. Restrict the key by HTTP referrer where supported."}
+              {currentProviderId === 'anthropic' &&
+                "The key is sent directly from your browser to Anthropic's API using direct browser access headers."}
+              {currentProviderId === 'deepseek' &&
+                "The key is sent directly from your browser to DeepSeek's API."}
             </span>
           </div>
 
@@ -241,7 +549,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               <div>
                 <p className="text-white font-medium">Re-classify ambiguous repositories</p>
                 <p className="text-[11px] text-github-muted">
-                  Retry all repositories currently labeled as "Other" with Gemini
+                  Retry all repositories currently labeled as "Other" with {currentProviderDef.label}
                 </p>
               </div>
               <button
@@ -249,7 +557,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 onClick={handleReclassify}
                 disabled={isSyncing || !hasKey}
                 className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg bg-[#a371f7]/15 border border-[#a371f7]/30 text-[#d2a8ff] hover:bg-[#a371f7]/25 disabled:opacity-40 disabled:cursor-not-allowed transition-colors cursor-pointer"
-                title={!hasKey ? 'Please enter a Gemini API key first' : 'Re-classify Other repos'}
+                title={!hasKey ? `Please enter a ${currentProviderDef.label} API key first` : 'Re-classify Other repos'}
               >
                 <Sparkles className="w-3.5 h-3.5" />
                 <span>Re-classify 'Other' repos</span>
