@@ -1,0 +1,43 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
+
+# Node modules
+node_modules
+dist
+dist-ssr
+*.local
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Environment secrets
+.env
+.env.*
+!.env.example
+
+# Local data cache, backup, and local dataset (not committed)
+data/repos.json
+data/metadata.json
+data/.cache.json
+data/repos.backup.json
+data/*.tmp.json
+
+# Local scripts
+powershell.bat
+
+# Local CLI output, cache, and scratch test artifacts
+repos.json
+.star-classifier-cache.json
+scratch/
